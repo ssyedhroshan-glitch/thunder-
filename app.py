@@ -35,7 +35,4 @@ demo = gr.ChatInterface(
     title="⚡ Thunder Chatbot"
 )
 
-# Render expects the app to run on port 10000 or a port assigned by the system
-port = int(os.environ.get("PORT", 10000))
-demo.launch(server_name="0.0.0.0", server_port=port)
-
+demo.launch(server_name="0.0.0.0", server_port=10000)
