@@ -3,7 +3,7 @@ import gradio as gr
 from transformers import pipeline
 
 print("Loading Thunder's AI engine...")
-# Using a small, efficient model optimized for free servers
+# Using the super-fast model optimized for free hosting
 st_ai = pipeline("text-generation", model="Qwen/Qwen2.5-0.5B-Instruct")
 
 def predict(message, history):
@@ -35,4 +35,6 @@ demo = gr.ChatInterface(
     title="⚡ Thunder Chatbot"
 )
 
-demo.launch(server_name="0.0.0.0", server_port=10000)
+# This line is critical! We tell Gradio to use the exact Port Render wants
+port_number = int(os.environ.get("PORT", 10000))
+demo.launch(server_name="0.0.0.0", server_port=port_number)
