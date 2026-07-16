@@ -37,13 +37,13 @@ def respond(message, history, system_prompt, temperature, max_tokens):
         # Build the message payload
         messages = [{"role": "system", "content": system_prompt}]
 
-        # History comes in as a list of {"role": ..., "content": ...} dicts
-        # (this is the format gr.Chatbot(type="messages") uses)
-        for item in history:
-            role = item.get("role")
-            content = item.get("content")
-            if role and content:
-                messages.append({"role": role, "content": content})
+        # Robust parsing of standard history format [[user, bot], [user, bot]]
+        for turn in history:
+            if isinstance(turn, (list, tuple)) and len(turn) >= 2:
+                if turn[0]:
+                    messages.append({"role": "user", "content": turn[0]})
+                if turn[1]:
+                    messages.append({"role": "assistant", "content": turn[1]})
 
         messages.append({"role": "user", "content": message})
 
@@ -75,8 +75,8 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
     gr.Markdown("# ⚡ THUNDER WORKSPACE // Voice v5.1")
     gr.Markdown("Active Mission Control. Click the Microphone to speak or use the chatbox below.")
 
-    # Custom components
-    chatbot = gr.Chatbot(type="messages")
+    # Custom components - removed the type="messages" parameter to prevent crashing
+    chatbot = gr.Chatbot()
 
     with gr.Row():
         msg = gr.Textbox(placeholder="Type your message here or speak into the microphone...", scale=8)
@@ -93,14 +93,21 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
 
     # Chat submit operations
     def user_send(message, history):
-        history = history + [{"role": "user", "content": message}]
-        return "", history
+        if history is None:
+            history = []
+        # Append message as a standard user prompt with empty bot response placeholder
+        return "", history + [[message, ""]]
 
     def bot_reply(history, sys_prompt, temp, tokens):
-        message = history[-1]["content"]
-        history.append({"role": "assistant", "content": ""})
-        for chunk in respond(message, history[:-1], sys_prompt, temp, tokens):
-            history[-1]["content"] = chunk
+        if not history:
+            yield history
+            return
+            
+        message = history[-1][0]  # Grab the last user message
+        api_history = history[:-1]  # Exclude the current active turn for backend history context
+        
+        for chunk in respond(message, api_history, sys_prompt, temp, tokens):
+            history[-1][1] = chunk  # Stream content into the assistant placeholder
             yield history
 
     # Submit action when typing and hitting enter
@@ -111,4 +118,3 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
 # Bind and launch on Render port
 port_number = int(os.environ.get("PORT", 10000))
 demo.launch(server_name="0.0.0.0", server_port=port_number)
-
