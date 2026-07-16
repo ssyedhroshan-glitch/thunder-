@@ -75,13 +75,13 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
     gr.Markdown("# ⚡ THUNDER WORKSPACE // Voice v5.1")
     gr.Markdown("Active Mission Control. Click the Microphone to speak or use the chatbox below.")
 
-    # Custom components - removed the type="messages" parameter to prevent crashing
+    # Custom components
     chatbot = gr.Chatbot()
 
     with gr.Row():
         msg = gr.Textbox(placeholder="Type your message here or speak into the microphone...", scale=8)
-        # Adds the voice recording microphone block right next to text input
-        audio_input = gr.Audio(sources=["microphone"], type="filepath", scale=4)
+        # FIXED: Switched "sources=['microphone']" to "source='microphone'" for backward compatibility
+        audio_input = gr.Audio(source="microphone", type="filepath", scale=4)
 
     # When the user stops recording voice, translate audio to text and drop it into the textbox (msg)
     audio_input.change(transcribe, inputs=[audio_input], outputs=[msg])
@@ -95,7 +95,6 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
     def user_send(message, history):
         if history is None:
             history = []
-        # Append message as a standard user prompt with empty bot response placeholder
         return "", history + [[message, ""]]
 
     def bot_reply(history, sys_prompt, temp, tokens):
@@ -104,7 +103,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
             return
             
         message = history[-1][0]  # Grab the last user message
-        api_history = history[:-1]  # Exclude the current active turn for backend history context
+        api_history = history[:-1]  # Exclude the current active turn
         
         for chunk in respond(message, api_history, sys_prompt, temp, tokens):
             history[-1][1] = chunk  # Stream content into the assistant placeholder
