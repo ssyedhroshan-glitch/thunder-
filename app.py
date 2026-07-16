@@ -11,10 +11,12 @@ def predict(message, history):
         messages = [{"role": "system", "content": "Your name is Thunder, a highly intelligent and helpful AI assistant."}]
         
         # Add past conversation history
-        for user_msg, ai_msg in history:
-            messages.append({"role": "user", "content": user_msg})
-            messages.append({"role": "assistant", "content": ai_msg})
-            
+        for msg in history:
+            if isinstance(msg, dict):
+                messages.append({"role": msg["role"], "content": msg["content"]})
+            else:
+                messages.append({"role": msg.role, "content": msg.content})
+                
         # Add current message
         messages.append({"role": "user", "content": message})
         
