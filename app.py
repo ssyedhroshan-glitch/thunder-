@@ -80,8 +80,8 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
 
     with gr.Row():
         msg = gr.Textbox(placeholder="Type your message here or speak into the microphone...", scale=8)
-        # FIXED: Switched "sources=['microphone']" to "source='microphone'" for backward compatibility
-        audio_input = gr.Audio(source="microphone", type="filepath", scale=4)
+        # BULLETPROOF FIX: Removed 'source' and 'sources' keywords entirely to bypass Gradio version mismatches.
+        audio_input = gr.Audio(type="filepath", scale=4)
 
     # When the user stops recording voice, translate audio to text and drop it into the textbox (msg)
     audio_input.change(transcribe, inputs=[audio_input], outputs=[msg])
