@@ -36,35 +36,30 @@ def respond(message, history, system_prompt, temperature, max_tokens):
     try:
         # Build the message payload
         messages = [{"role": "system", "content": system_prompt}]
-        
-        # Safe history parsing
+
+        # History comes in as a list of {"role": ..., "content": ...} dicts
+        # (this is the format gr.Chatbot(type="messages") uses)
         for item in history:
-    role = item.get("role")
-    content = item.get("content")
-    if role and content:
-        messages.append({"role": role, "content": content})
-                user_content = item[0]
-                assistant_content = item[1]
-                if user_content:
-                    messages.append({"role": "user", "content": user_content})
-                if assistant_content:
-                    messages.append({"role": "assistant", "content": assistant_content})
-                
+            role = item.get("role")
+            content = item.get("content")
+            if role and content:
+                messages.append({"role": role, "content": content})
+
         messages.append({"role": "user", "content": message})
-        
+
         # Stream response
         response = ""
         for token in client.chat_completion(
-            messages, 
-            max_tokens=max_tokens, 
-            temperature=temperature, 
+            messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
             stream=True
         ):
             token_text = token.choices[0].delta.content
             if token_text:
                 response += token_text
                 yield response
-                
+
     except Exception as e:
         yield f"Error: {str(e)}"
 
@@ -79,15 +74,15 @@ footer {visibility: hidden}
 with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), css=custom_css) as demo:
     gr.Markdown("# ⚡ THUNDER WORKSPACE // Voice v5.1")
     gr.Markdown("Active Mission Control. Click the Microphone to speak or use the chatbox below.")
-    
+
     # Custom components
     chatbot = gr.Chatbot(type="messages")
-    
+
     with gr.Row():
         msg = gr.Textbox(placeholder="Type your message here or speak into the microphone...", scale=8)
         # Adds the voice recording microphone block right next to text input
         audio_input = gr.Audio(sources=["microphone"], type="filepath", scale=4)
-    
+
     # When the user stops recording voice, translate audio to text and drop it into the textbox (msg)
     audio_input.change(transcribe, inputs=[audio_input], outputs=[msg])
 
@@ -116,4 +111,4 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
 # Bind and launch on Render port
 port_number = int(os.environ.get("PORT", 10000))
 demo.launch(server_name="0.0.0.0", server_port=port_number)
-        
+
