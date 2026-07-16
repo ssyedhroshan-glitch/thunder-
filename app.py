@@ -3,7 +3,7 @@ import gradio as gr
 from huggingface_hub import InferenceClient
 
 # We use Hugging Face's Serverless API to offload 100% of the RAM usage
-client = InferenceClient("Qwen/Qwen2.5-7B-Instruct")
+client = InferenceClient("Qwen/Qwen2.5-7B-Instruct"),token="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")
 
 def predict(message, history):
     try:
@@ -33,7 +33,6 @@ def predict(message, history):
 demo = gr.ChatInterface(
     fn=predict, 
     title="⚡ Thunder Chatbot"
-     # Use modern Gradio chat format
 )
 
 # Bind to Render's required port
