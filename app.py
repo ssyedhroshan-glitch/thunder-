@@ -5,21 +5,15 @@ from huggingface_hub import InferenceClient
 # Initialize the Hugging Face client with the working Qwen model
 client = InferenceClient("Qwen/Qwen2.5-7B-Instruct", token=os.environ.get("HF_TOKEN"))
 
-# The Brain: Advanced System Prompt tailoring it to your interests
-SYSTEM_PROMPT = """You are Thunder, a highly advanced AI mentor specializing in two core disciplines:
-1. Aerospace Engineering & Green Aviation (sustainable propulsion, electric aircraft, aerospace hardware).
-2. Advanced Economics & Commerce (microeconomics, market forces, demand elasticity).
-
-When the user asks technical questions, provide deep, accurate insights. Use professional but clear terminology. 
-If they ask economics questions, relate concepts to real-world industrial or tech frameworks where helpful. 
-Keep responses well-structured, using bullet points or clean spacing. Never break character."""
+# General purpose system prompt
+SYSTEM_PROMPT = "Your name is Thunder, a highly intelligent, powerful, and helpful AI assistant."
 
 def predict(message, history):
     try:
-        # Format the chat history for the Qwen model
+        # Format the chat history for the model
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
         
-        # Add past conversation history cleanly (handles object-style history format)
+        # Add past conversation history cleanly
         for msg in history:
             if isinstance(msg, dict):
                 messages.append({"role": msg["role"], "content": msg["content"]})
@@ -29,7 +23,7 @@ def predict(message, history):
         # Add current message
         messages.append({"role": "user", "content": message})
         
-        # Stream response back token by token for ultra-fast UI updates
+        # Stream response back token by token
         response = ""
         for token in client.chat_completion(messages, max_tokens=1024, stream=True):
             token_text = token.choices[0].delta.content
@@ -40,32 +34,23 @@ def predict(message, history):
     except Exception as e:
         yield f"Error: {str(e)}"
 
-# The Look: Designing a beautiful, multi-column Dashboard UI using Blocks
+# Designing a beautiful, clean dashboard layout using gr.Blocks
 with gr.Blocks(theme=gr.themes.Soft()) as demo:
-    gr.Markdown("# ⚡ Thunder Chatbot Dashboard")
-    gr.Markdown("Welcome to your upgraded workspace. This assistant is optimized for advanced technical modeling and analytics.")
+    gr.Markdown("# ⚡ Thunder Chatbot Workspace")
+    gr.Markdown("Welcome to your upgraded general-purpose AI workspace.")
     
     with gr.Row():
-        # Left Side Column: Quick Utilities & Resources
+        # Left Side Column: Clean utilities panel
         with gr.Column(scale=1):
-            gr.Markdown("### 🛠️ Study Workspace")
-            
-            with gr.Accordion("Quick Formulas & References", open=False):
-                gr.Markdown(
-                    "**Aerospace Propulsion:**\n"
-                    "- $F = \dot{m} \cdot v_e + (p_e - p_a) \cdot A_e$\n\n"
-                    "**Microeconomics (Elasticity):**\n"
-                    "- $E_d = \\frac{\\% \\Delta Q}{\\% \\Delta P}$"
-                )
-            
+            gr.Markdown("### 🛠️ Controls")
             clear_btn = gr.Button("🗑️ Clear Active Session", variant="secondary")
             gr.Markdown("---")
-            gr.Markdown("💡 *Tip: Toggle the accordion above to check core formulas while chatting with Thunder.*")
+            gr.Markdown("💡 *Tip: Use the button above to instantly clear out the conversation window and reset the chat.*")
             
         # Right Side Column: The Chat Window
         with gr.Column(scale=3):
             chatbot = gr.Chatbot(label="Thunder Engine v2.5", bubble_colors=("#2563EB", "#374151"))
-            msg_input = gr.Textbox(placeholder="Ask anything about aerospace engineering or advanced economics...", label="Prompt Input")
+            msg_input = gr.Textbox(placeholder="Type your message here...", label="Prompt Input")
             
             # Setup the submission triggers
             submit_event = msg_input.submit(predict, [msg_input, chatbot], [chatbot])
