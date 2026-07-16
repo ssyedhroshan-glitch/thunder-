@@ -1,40 +1,41 @@
 import os
 import gradio as gr
-from transformers import pipeline
+from huggingface_hub import InferenceClient
 
-print("Loading Thunder's AI engine...")
-# Using the super-fast model optimized for free hosting
-st_ai = pipeline("text-generation", model="Qwen/Qwen2.5-0.5B-Instruct")
+# We use Hugging Face's Serverless API to offload 100% of the RAM usage
+client = InferenceClient("Qwen/Qwen2.5-7B-Instruct")
 
 def predict(message, history):
     try:
-        if isinstance(message, dict) and "text" in message:
-            user_text = str(message["text"])
-        elif isinstance(message, list):
-            user_text = str(message[0])
-        else:
-            user_text = str(message)
+        # Format the chat history for a highly advanced model
+        messages = [{"role": "system", "content": "Your name is Thunder, a highly intelligent and helpful AI assistant."}]
+        
+        # Add past conversation history
+        for user_msg, ai_msg in history:
+            messages.append({"role": "user", "content": user_msg})
+            messages.append({"role": "assistant", "content": ai_msg})
             
-        prompt = f"System: Your name is Thunder, a helpful AI assistant.\nUser: {user_text}\nAssistant:"
+        # Add current message
+        messages.append({"role": "user", "content": message})
         
-        output = st_ai(prompt, max_new_tokens=100)
-        ai_response = str(output[0]['generated_text'])
-        
-        if "Assistant:" in ai_response:
-            ai_response = ai_response.split("Assistant:")[-1].strip()
-        elif ai_response.startswith(prompt):
-            ai_response = ai_response[len(prompt):].strip()
-            
-        return ai_response
-        
+        # Get response from the API
+        response = ""
+        for token in client.chat_completion(messages, max_tokens=512, stream=True):
+            token_text = token.choices[0].delta.content
+            if token_text:
+                response += token_text
+                yield response
+                
     except Exception as e:
-        return f"Error: {str(e)}"
+        yield f"Error: {str(e)}"
 
+# Define the clean Gradio Interface
 demo = gr.ChatInterface(
     fn=predict, 
-    title="⚡ Thunder Chatbot"
+    title="⚡ Thunder Chatbot",
+    type="messages"  # Use modern Gradio chat format
 )
 
-# This line is critical! We tell Gradio to use the exact Port Render wants
+# Bind to Render's required port
 port_number = int(os.environ.get("PORT", 10000))
 demo.launch(server_name="0.0.0.0", server_port=port_number)
