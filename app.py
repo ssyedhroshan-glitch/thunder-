@@ -3,7 +3,7 @@ import gradio as gr
 from huggingface_hub import InferenceClient
 
 # We use Hugging Face's Serverless API to offload 100% of the RAM usage
-client = InferenceClient("Qwen/Qwen2.5-7B-Instruct"),token="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")
+client = InferenceClient("Qwen/Qwen2.5-7B-Instruct",token="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")
 
 def predict(message, history):
     try:
