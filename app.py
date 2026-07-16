@@ -39,7 +39,10 @@ def respond(message, history, system_prompt, temperature, max_tokens):
         
         # Safe history parsing
         for item in history:
-            if isinstance(item, (list, tuple)) and len(item) >= 2:
+    role = item.get("role")
+    content = item.get("content")
+    if role and content:
+        messages.append({"role": role, "content": content})
                 user_content = item[0]
                 assistant_content = item[1]
                 if user_content:
