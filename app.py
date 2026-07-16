@@ -2,8 +2,11 @@ import os
 import gradio as gr
 from huggingface_hub import InferenceClient
 
-# Initialize the Hugging Face client with the working Qwen model
-client = InferenceClient("Qwen/Qwen2.5-7B-Instruct", token=os.environ.get("HF_TOKEN"))
+# Retrieve the token securely from Render's environment variables
+hf_token = os.environ.get("HF_TOKEN")
+
+# Initialize the Hugging Face client
+client = InferenceClient("Qwen/Qwen2.5-7B-Instruct", token=hf_token)
 
 # The Brain: Programmed with my exact personality traits!
 SYSTEM_PROMPT = (
@@ -55,5 +58,15 @@ def respond(message, history):
 demo = gr.ChatInterface(
     fn=respond,
     title="⚡ Thunder Workspace",
-    description="
-    
+    description="Your personal adaptive AI companion. Upgraded with custom visual styles and running smoothly.",
+    theme=gr.themes.Soft(
+        primary_hue="blue",
+        secondary_hue="slate",
+        neutral_hue="neutral"
+    ),
+    textbox=gr.Textbox(placeholder="Type your message here and press Enter...", container=False, scale=7)
+)
+
+# Bind to Render's environment port
+port_number = int(os.environ.get("PORT", 10000))
+demo.launch(server_name="0.0.0.0", server_port=port_number)
