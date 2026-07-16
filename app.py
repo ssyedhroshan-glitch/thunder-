@@ -32,8 +32,8 @@ def predict(message, history):
 # Define the clean Gradio Interface
 demo = gr.ChatInterface(
     fn=predict, 
-    title="⚡ Thunder Chatbot",
-    type="messages"  # Use modern Gradio chat format
+    title="⚡ Thunder Chatbot"
+     # Use modern Gradio chat format
 )
 
 # Bind to Render's required port
