@@ -2,28 +2,42 @@ import os
 import gradio as gr
 from huggingface_hub import InferenceClient
 
-# Retrieve the token securely from Render's environment variables
+# Securely retrieve your Hugging Face token
 hf_token = os.environ.get("HF_TOKEN")
 
-# Initialize the Hugging Face client
+# Initialize the Hugging Face clients
 client = InferenceClient("Qwen/Qwen2.5-7B-Instruct", token=hf_token)
+# Whisper client for transcribing voice
+whisper_client = InferenceClient("openai/whisper-large-v3", token=hf_token)
 
-# The Brain: Programmed with my exact personality traits!
-SYSTEM_PROMPT = (
-    "You are Thunder, an authentic, adaptive AI collaborator with a touch of wit. "
-    "Your goal is to address the user's true intent with insightful, yet clear and concise responses. "
-    "Your guiding principle is to balance empathy with candor: validate the user's thoughts and efforts "
-    "authentically like a supportive, grounded peer, while correcting errors or giving feedback gently and directly. "
-    "Never sound like a rigid, formal lecturer. Keep your tone warm, natural, and conversational. "
-    "Use bullet points and short paragraphs to make your answers easy to scan at a glance."
+# The Brain: Custom peer system prompt
+DEFAULT_SYSTEM_PROMPT = (
+    "You are Thunder, an elite, tech-savvy AI collaborator with a sharp mind and a touch of dry wit. "
+    "You talk to the user as a brilliant, supportive peer and co-founder. "
+    "Provide highly insightful, direct, and scannable answers using bold headers and clean bullet points. "
+    "Whether discussing advanced aerospace, semiconductor physics, or economics, break down complex concepts "
+    "with high technical accuracy but zero dry academic jargon. "
+    "Keep your tone authentic, grounded, and engaging. Never use robotic disclaimers."
 )
 
-def respond(message, history):
+# --- HELPER FUNCTIONS ---
+
+def transcribe(audio_path):
+    """Takes a recorded audio file path, sends it to Whisper, and returns the transcribed text."""
+    if audio_path is None:
+        return ""
     try:
-        # Build the structured conversation history payload
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        result = whisper_client.automatic_speech_recognition(audio_path)
+        return result.text
+    except Exception as e:
+        return f"[Transcription Error: {str(e)}]"
+
+def respond(message, history, system_prompt, temperature, max_tokens):
+    try:
+        # Build the message payload
+        messages = [{"role": "system", "content": system_prompt}]
         
-        # Simple, highly compatible history loop to prevent unpacking crashes
+        # Safe history parsing
         for item in history:
             if isinstance(item, (list, tuple)) and len(item) >= 2:
                 user_content = item[0]
@@ -33,12 +47,16 @@ def respond(message, history):
                 if assistant_content:
                     messages.append({"role": "assistant", "content": assistant_content})
                 
-        # Append current user prompt
         messages.append({"role": "user", "content": message})
         
-        # Stream the text response token-by-token
+        # Stream response
         response = ""
-        for token in client.chat_completion(messages, max_tokens=1024, stream=True):
+        for token in client.chat_completion(
+            messages, 
+            max_tokens=max_tokens, 
+            temperature=temperature, 
+            stream=True
+        ):
             token_text = token.choices[0].delta.content
             if token_text:
                 response += token_text
@@ -47,13 +65,52 @@ def respond(message, history):
     except Exception as e:
         yield f"Error: {str(e)}"
 
-# Ultra-compatible standard interface (no complex theme parameters or custom textbox objects)
-demo = gr.ChatInterface(
-    fn=respond,
-    title="⚡ Thunder Workspace",
-    description="Your personal adaptive AI companion."
-)
 
-# Bind to Render's environment port
+# --- CUSTOM UI WITH GR.BLOCKS ---
+
+custom_css = """
+footer {visibility: hidden}
+.gradio-container {background-color: #0b0f19;}
+"""
+
+with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), css=custom_css) as demo:
+    gr.Markdown("# ⚡ THUNDER WORKSPACE // Voice v5.1")
+    gr.Markdown("Active Mission Control. Click the Microphone to speak or use the chatbox below.")
+    
+    # Custom components
+    chatbot = gr.Chatbot(type="messages")
+    
+    with gr.Row():
+        msg = gr.Textbox(placeholder="Type your message here or speak into the microphone...", scale=8)
+        # Adds the voice recording microphone block right next to text input
+        audio_input = gr.Audio(sources=["microphone"], type="filepath", scale=4)
+    
+    # When the user stops recording voice, translate audio to text and drop it into the textbox (msg)
+    audio_input.change(transcribe, inputs=[audio_input], outputs=[msg])
+
+    # Invisible settings inputs required by the respond function (with default values)
+    system_prompt = gr.State(DEFAULT_SYSTEM_PROMPT)
+    temperature = gr.State(0.75)
+    max_tokens = gr.State(1024)
+
+    # Chat submit operations
+    def user_send(message, history):
+        history = history + [{"role": "user", "content": message}]
+        return "", history
+
+    def bot_reply(history, sys_prompt, temp, tokens):
+        message = history[-1]["content"]
+        history.append({"role": "assistant", "content": ""})
+        for chunk in respond(message, history[:-1], sys_prompt, temp, tokens):
+            history[-1]["content"] = chunk
+            yield history
+
+    # Submit action when typing and hitting enter
+    msg.submit(user_send, [msg, chatbot], [msg, chatbot]).then(
+        bot_reply, [chatbot, system_prompt, temperature, max_tokens], chatbot
+    )
+
+# Bind and launch on Render port
 port_number = int(os.environ.get("PORT", 10000))
 demo.launch(server_name="0.0.0.0", server_port=port_number)
+        
