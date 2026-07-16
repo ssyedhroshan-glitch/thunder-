@@ -1,5 +1,2 @@
 gradio
-transformers
-torch
-sentencepiece
-
+huggingface_hub
