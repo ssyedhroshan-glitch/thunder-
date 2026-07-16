@@ -23,16 +23,9 @@ def respond(message, history):
         # Build the structured conversation history payload
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
         
-        # Super-robust history parsing to prevent any "unpacking" errors
+        # Simple, highly compatible history loop to prevent unpacking crashes
         for item in history:
-            if isinstance(item, dict):
-                role = item.get("role")
-                content = item.get("content")
-                if role and content:
-                    messages.append({"role": role, "content": content})
-            elif hasattr(item, "role") and hasattr(item, "content"):
-                messages.append({"role": item.role, "content": item.content})
-            elif isinstance(item, (list, tuple)) and len(item) >= 2:
+            if isinstance(item, (list, tuple)) and len(item) >= 2:
                 user_content = item[0]
                 assistant_content = item[1]
                 if user_content:
@@ -54,17 +47,11 @@ def respond(message, history):
     except Exception as e:
         yield f"Error: {str(e)}"
 
-# The Look: Styling the ChatInterface directly for a gorgeous custom theme
+# Ultra-compatible standard interface (no complex theme parameters or custom textbox objects)
 demo = gr.ChatInterface(
     fn=respond,
     title="⚡ Thunder Workspace",
-    description="Your personal adaptive AI companion. Upgraded with custom visual styles and running smoothly.",
-    theme=gr.themes.Soft(
-        primary_hue="blue",
-        secondary_hue="slate",
-        neutral_hue="neutral"
-    ),
-    textbox=gr.Textbox(placeholder="Type your message here and press Enter...", container=False, scale=7)
+    description="Your personal adaptive AI companion."
 )
 
 # Bind to Render's environment port
