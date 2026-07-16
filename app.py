@@ -5,7 +5,7 @@ from huggingface_hub import InferenceClient
 # Initialize the Hugging Face client with the working Qwen model
 client = InferenceClient("Qwen/Qwen2.5-7B-Instruct", token=os.environ.get("HF_TOKEN"))
 
-# The Brain: Loaded with our adaptive peer personality!
+# The Brain: Programmed with my exact personality traits!
 SYSTEM_PROMPT = (
     "You are Thunder, an authentic, adaptive AI collaborator with a touch of wit. "
     "Your goal is to address the user's true intent with insightful, yet clear and concise responses. "
@@ -15,80 +15,45 @@ SYSTEM_PROMPT = (
     "Use bullet points and short paragraphs to make your answers easy to scan at a glance."
 )
 
-# Step 1: Push the user's input directly into the chat history layout
-def add_user_message(user_message, history):
-    if not user_message.strip():
-        return "", history
-    # Appends the user message and sets up a blank placeholder for the bot
-    return "", history + [[user_message, ""]]
-
-# Step 2: Stream the bot's response token-by-token into that placeholder
-def respond(history):
+def respond(message, history):
     try:
-        # Build the system prompt
+        # Build the structured conversation history payload
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
         
-        # Loop through all messages except the last one (which is the current, empty placeholder)
-        for user_msg, ai_msg in history[:-1]:
-            if user_msg:
-                messages.append({"role": "user", "content": user_msg})
-            if ai_msg:
-                messages.append({"role": "assistant", "content": ai_msg})
+        # Super-robust history parsing to prevent any "unpacking" errors
+        for item in history:
+            if isinstance(item, dict):
+                role = item.get("role")
+                content = item.get("content")
+                if role and content:
+                    messages.append({"role": role, "content": content})
+            elif hasattr(item, "role") and hasattr(item, "content"):
+                messages.append({"role": item.role, "content": item.content})
+            elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                user_content = item[0]
+                assistant_content = item[1]
+                if user_content:
+                    messages.append({"role": "user", "content": user_content})
+                if assistant_content:
+                    messages.append({"role": "assistant", "content": assistant_content})
                 
-        # Append the active user query (the last item in the list)
-        messages.append({"role": "user", "content": history[-1][0]})
+        # Append current user prompt
+        messages.append({"role": "user", "content": message})
         
-        # Stream the text response
-        response_text = ""
+        # Stream the text response token-by-token
+        response = ""
         for token in client.chat_completion(messages, max_tokens=1024, stream=True):
             token_text = token.choices[0].delta.content
             if token_text:
-                response_text += token_text
-                # Dynamically update the bot message index in our history list
-                history[-1][1] = response_text
-                yield history
+                response += token_text
+                yield response
                 
     except Exception as e:
-        history[-1][1] = f"Error: {str(e)}"
-        yield history
+        yield f"Error: {str(e)}"
 
-# The Look: Custom Dashboard Design using Blocks
-with gr.Blocks(theme=gr.themes.Soft()) as demo:
-    gr.Markdown("# ⚡ Thunder Workspace")
-    gr.Markdown("Your custom-designed, adaptive AI companion setup.")
+# The Look: Styling the ChatInterface directly for a gorgeous custom theme
+demo = gr.ChatInterface(
+    fn=respond,
+    title="⚡ Thunder Workspace",
+    description="
     
-    with gr.Row():
-        # Left Panel (Controls & Sidebar info)
-        with gr.Column(scale=1):
-            gr.Markdown("### 🛠️ Workspace Controls")
-            clear_btn = gr.Button("🗑️ Clear Active Chat", variant="secondary")
-            gr.Markdown("---")
-            gr.Markdown(
-                "### 💡 Tips & Tricks\n"
-                "- **Peer Mode:** Thunder is tuned to talk like a helpful classmate, not a textbook.\n"
-                "- **Need a fresh start?** Click the Clear button to wipe the board clean."
-            )
-            
-        # Right Panel (The Chat interface)
-        with gr.Column(scale=3):
-            chatbot = gr.Chatbot(label="Thunder Engine v2.5", bubble_colors=("#2563EB", "#374151"))
-            msg_input = gr.Textbox(placeholder="Type your message here and press Enter...", label="Message Input")
-            
-            # Chain the actions together sequentially
-            msg_input.submit(
-                fn=add_user_message, 
-                inputs=[msg_input, chatbot], 
-                outputs=[msg_input, chatbot],
-                queue=False
-            ).then(
-                fn=respond,
-                inputs=[chatbot],
-                outputs=[chatbot]
-            )
-            
-            # Click clear button resets the chat array
-            clear_btn.click(lambda: [], None, chatbot, queue=False)
-
-# Bind to Render's port
-port_number = int(os.environ.get("PORT", 10000))
-demo.launch(server_name="0.0.0.0", server_port=port_number)
