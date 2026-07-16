@@ -5,7 +5,7 @@ from huggingface_hub import InferenceClient
 # Initialize the Hugging Face client with the working Qwen model
 client = InferenceClient("Qwen/Qwen2.5-7B-Instruct", token=os.environ.get("HF_TOKEN"))
 
-# The Brain: Making Thunder act exactly like an adaptive, friendly AI peer
+# The Brain: Formatted to make Thunder act exactly like an adaptive, friendly AI peer
 SYSTEM_PROMPT = (
     "You are Thunder, an authentic, adaptive, and highly helpful AI companion. "
     "Your goal is to be a supportive peer, balancing clear insights with friendly candor. "
@@ -17,12 +17,10 @@ def respond(message, history):
         # Build the structured conversation history payload
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
         
-        # Format history smoothly for modern Gradio versions
-        for msg in history:
-            if isinstance(msg, dict):
-                messages.append({"role": msg["role"], "content": msg["content"]})
-            elif hasattr(msg, "role") and hasattr(msg, "content"):
-                messages.append({"role": msg.role, "content": msg.content})
+        # Format history smoothly to match standard list pairs format
+        for user_msg, ai_msg in history:
+            messages.append({"role": "user", "content": user_msg})
+            messages.append({"role": "assistant", "content": ai_msg})
                 
         # Append current user prompt
         messages.append({"role": "user", "content": message})
@@ -38,15 +36,13 @@ def respond(message, history):
     except Exception as e:
         yield f"Error: {str(e)}"
 
-# A clean, high-compatibility Gradio Interface setup
+# Standard, highly compatible Gradio ChatInterface architecture
 demo = gr.ChatInterface(
     fn=respond,
     title="⚡ Thunder Workspace",
-    description="Your personal adaptive AI companion. Upgraded and running smoothly.",
-    type="messages"
+    description="Your personal adaptive AI companion. Upgraded and running smoothly."
 )
 
 # Bind to Render's environment port
 port_number = int(os.environ.get("PORT", 10000))
 demo.launch(server_name="0.0.0.0", server_port=port_number)
-
