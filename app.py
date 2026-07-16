@@ -20,10 +20,28 @@ def respond(message, history):
         # Build the structured conversation history payload
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
         
-        # Format history smoothly to match standard list pairs format
-        for user_msg, ai_msg in history:
-            messages.append({"role": "user", "content": user_msg})
-            messages.append({"role": "assistant", "content": ai_msg})
+        # Super-robust history parsing to prevent any "unpacking" errors
+        for item in history:
+            # Case 1: Standard dictionary format
+            if isinstance(item, dict):
+                role = item.get("role")
+                content = item.get("content")
+                if role and content:
+                    messages.append({"role": role, "content": content})
+            
+            # Case 2: Object format (Gradio ChatMessage)
+            elif hasattr(item, "role") and hasattr(item, "content"):
+                messages.append({"role": item.role, "content": item.content})
+            
+            # Case 3: List/Tuple format (supports 2-element or larger metadata tuples)
+            elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                # We only take the first two elements (user text and assistant text)
+                user_content = item[0]
+                assistant_content = item[1]
+                if user_content:
+                    messages.append({"role": "user", "content": user_content})
+                if assistant_content:
+                    messages.append({"role": "assistant", "content": assistant_content})
                 
         # Append current user prompt
         messages.append({"role": "user", "content": message})
@@ -49,3 +67,4 @@ demo = gr.ChatInterface(
 # Bind to Render's environment port
 port_number = int(os.environ.get("PORT", 10000))
 demo.launch(server_name="0.0.0.0", server_port=port_number)
+
