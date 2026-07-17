@@ -29,12 +29,11 @@ def init_db():
     conn.close()
 
 def load_history_as_list():
-    """Loads history in the format Gradio Chatbot natively expects [[user, bot]]."""
+    """Loads history in the exact format Gradio natively expects: [[user, bot]]."""
     conn = sqlite3.connect(DB_PATH)
     rows = conn.execute("SELECT role, content FROM history ORDER BY id").fetchall()
     conn.close()
     
-    # Restructure into standard list of lists pairs
     chat_list = []
     current_pair = [None, None]
     
@@ -75,7 +74,7 @@ DEFAULT_SYSTEM_PROMPT = (
     "Provide highly insightful, direct, and scannable answers using bold headers and clean bullet points. "
     "Break down complex concepts with high technical accuracy but zero dry academic jargon. "
     "Keep your tone authentic, grounded, and engaging. Never use robotic disclaimers. "
-    "Only bring up a specific topic (aerospace, finance, code, etc.) if the user actually raises it."
+    "Only bring up a specific topic if the user raises it."
 )
 
 # --- HELPER FUNCTIONS ---
@@ -86,10 +85,9 @@ def transcribe(audio_path):
         return ""
     try:
         result = whisper_client.automatic_speech_recognition(audio_path)
-        return result.text
+        return result.text if hasattr(result, "text") else str(result)
     except Exception as e:
         return f"[Transcription Error: {str(e)}]"
-
 
 def speak(text):
     """Voice output: turn Thunder's reply into playable audio."""
@@ -107,7 +105,6 @@ def speak(text):
         return tmp.name
     except Exception:
         return None
-
 
 def read_file(file_path):
     """File reading: extract text from an uploaded file."""
@@ -136,9 +133,8 @@ def read_file(file_path):
     except Exception as e:
         return f"[File Read Error: {str(e)}]"
 
-
 def web_search(query, max_results=3):
-    """Live web search using DuckDuckGo (CORRECTED IMPORT)."""
+    """Live web search using DuckDuckGo (Fixed implementation)."""
     try:
         from duckduckgo_search import DDGS
         with DDGS() as ddgs:
@@ -152,7 +148,6 @@ def web_search(query, max_results=3):
     except Exception as e:
         return f"[Search Error: {str(e)}]"
 
-
 def respond(message, history, system_prompt, temperature, max_tokens, file_context, search_enabled):
     try:
         full_system_prompt = system_prompt
@@ -162,26 +157,21 @@ def respond(message, history, system_prompt, temperature, max_tokens, file_conte
             if results and not results.startswith("[Search Error"):
                 full_system_prompt += (
                     "\n\nHere are live web search results relevant to the user's message. "
-                    "Use them if helpful, and mention they're current info when relevant:\n\n" + results
+                    "Use them if helpful:\n\n" + results
                 )
 
         if file_context:
             full_system_prompt += (
-                "\n\nThe user has shared a file. Use its contents to answer questions "
-                "when relevant:\n\n" + file_context
+                "\n\nThe user has shared a workspace file context. Use its contents when relevant:\n\n" + file_context
             )
 
         messages = [{"role": "system", "content": full_system_prompt}]
         
-        # Format-agnostic layout safety loop parses history into system message structures safely
+        # Flawlessly convert list-of-lists layout to OpenAI/HF format
         for turn in history:
             if isinstance(turn, (list, tuple)) and len(turn) >= 2:
                 if turn[0]: messages.append({"role": "user", "content": turn[0]})
                 if turn[1]: messages.append({"role": "assistant", "content": turn[1]})
-            elif isinstance(turn, dict):
-                role = turn.get("role")
-                content = turn.get("content")
-                if role and content: messages.append({"role": role, "content": content})
 
         messages.append({"role": "user", "content": message})
 
@@ -200,7 +190,6 @@ def respond(message, history, system_prompt, temperature, max_tokens, file_conte
     except Exception as e:
         yield f"Error: {str(e)}"
 
-
 # --- CUSTOM UI WITH GR.BLOCKS ---
 
 custom_css = """
@@ -209,8 +198,8 @@ footer {visibility: hidden}
 """
 
 with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), css=custom_css) as demo:
-    gr.Markdown("# ⚡ THUNDER WORKSPACE // Core v7.1")
-    gr.Markdown("Speak, type, upload files, or perform real-time queries through DuckDuckGo securely.")
+    gr.Markdown("# ⚡ THUNDER WORKSPACE // Core v7.2")
+    gr.Markdown("Production Environment. Speak, type text, scan files, or toggle real-time query engines simultaneously.")
 
     chatbot = gr.Chatbot(value=load_history_as_list(), height=500)
 
@@ -228,7 +217,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
 
     audio_input.change(transcribe, inputs=[audio_input], outputs=[msg])
 
-    # State Configurations
+    # Persistent State Declarations
     system_prompt = gr.State(DEFAULT_SYSTEM_PROMPT)
     temperature = gr.State(0.75)
     max_tokens = gr.State(1024)
