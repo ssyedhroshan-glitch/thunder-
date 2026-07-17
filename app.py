@@ -1,44 +1,85 @@
 import os
 import tempfile
+import sqlite3
+import json
 import gradio as gr
 from huggingface_hub import InferenceClient
 
-HF_TOKEN = os.environ.get("HF_TOKEN")
+# Securely retrieve your Hugging Face token
+hf_token = os.environ.get("HF_TOKEN")
 
-# Initialize Hugging Face clients
-client = InferenceClient(model="Qwen/Qwen2.5-7B-Instruct", token=HF_TOKEN)
-whisper_client = InferenceClient(model="openai/whisper-large-v3", token=HF_TOKEN)
-tts_client = InferenceClient(model="microsoft/speecht5_tts", token=HF_TOKEN)
+# Initialize the Hugging Face clients
+client = InferenceClient("Qwen/Qwen2.5-7B-Instruct", token=hf_token)
+whisper_client = InferenceClient("openai/whisper-large-v3", token=hf_token)
+tts_client = InferenceClient("microsoft/speecht5_tts", token=hf_token)
 
+# --- SESSION MEMORY (SQLite) ---
+# NOTE: Render's free tier wipes disk on every restart/spin-down, so this
+# memory only survives while the app stays awake. For memory that survives
+# redeploys, swap this out for an external DB (e.g. Supabase/Postgres) later.
+DB_PATH = "thunder_memory.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            role TEXT,
+            content TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+def load_history():
+    conn = sqlite3.connect(DB_PATH)
+    rows = conn.execute("SELECT role, content FROM history ORDER BY id").fetchall()
+    conn.close()
+    return [{"role": r, "content": c} for r, c in rows]
+
+def save_message(role, content):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("INSERT INTO history (role, content) VALUES (?, ?)", (role, content))
+    conn.commit()
+    conn.close()
+
+def clear_history():
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("DELETE FROM history")
+    conn.commit()
+    conn.close()
+
+init_db()
+
+# The Brain: Custom peer system prompt
 DEFAULT_SYSTEM_PROMPT = (
     "You are Thunder, an elite, tech-savvy AI collaborator with a sharp mind and a touch of dry wit. "
     "You talk to the user as a brilliant, supportive peer and co-founder. "
-    "Provide highly insightful, direct, and scannable answers using clear headings and clean bullet points. "
+    "Provide highly insightful, direct, and scannable answers using bold headers and clean bullet points. "
     "Break down complex concepts with high technical accuracy but zero dry academic jargon. "
     "Keep your tone authentic, grounded, and engaging. Never use robotic disclaimers. "
-    "Only bring up a specific topic if the user actually raises it."
+    "Only bring up a specific topic (aerospace, finance, code, etc.) if the user actually raises it."
 )
 
 # --- HELPER FUNCTIONS ---
 
 def transcribe(audio_path):
-    if not audio_path:
+    """Voice input: turn recorded speech into text."""
+    if audio_path is None:
         return ""
     try:
         result = whisper_client.automatic_speech_recognition(audio_path)
-        return result.text if hasattr(result, "text") else str(result)
+        return result.text
     except Exception as e:
         return f"[Transcription Error: {str(e)}]"
 
+
 def speak(text):
+    """Voice output: turn Thunder's reply into playable audio."""
     if not text:
         return None
     try:
-        clean_text = text.replace("*", "").replace("#", "").replace("- ", "")
-        if len(clean_text) > 250:
-            clean_text = clean_text[:250] + "..."
-            
-        audio_bytes = tts_client.text_to_speech(clean_text)
+        audio_bytes = tts_client.text_to_speech(text)
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
         tmp.write(audio_bytes)
         tmp.close()
@@ -46,21 +87,18 @@ def speak(text):
     except Exception:
         return None
 
-def read_file(file_obj):
-    if file_obj is None:
+
+def read_file(file_path):
+    """File reading: extract text from an uploaded file so Thunder can use it as context."""
+    if file_path is None:
         return ""
     try:
-        file_path = file_obj.name if hasattr(file_obj, "name") else file_obj
         ext = os.path.splitext(file_path)[1].lower()
-
         if ext == ".pdf":
-            try:
-                from pypdf import PdfReader
-                reader = PdfReader(file_path)
-                text = "\n".join(page.extract_text() or "" for page in reader.pages)
-            except ImportError:
-                return "[Error: Please add pypdf to requirements.txt]"
-        elif ext in [".txt", ".md", ".csv", ".py", ".json"]:
+            from pypdf import PdfReader
+            reader = PdfReader(file_path)
+            text = "\n".join(page.extract_text() or "" for page in reader.pages)
+        elif ext in (".txt", ".md", ".csv", ".py", ".json"):
             with open(file_path, "r", errors="ignore") as f:
                 text = f.read()
         else:
@@ -73,137 +111,141 @@ def read_file(file_obj):
     except Exception as e:
         return f"[File Read Error: {str(e)}]"
 
-def stream_answer(messages, temperature, max_tokens):
-    response = ""
-    for chunk in client.chat_completion(
-        messages,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        stream=True,
-    ):
-        token_text = chunk.choices[0].delta.content or ""
-        response += token_text
-        yield response
 
-# --- VERSION-AGNOSTIC STATE OPERATIONS ---
-
-def on_user_submit(message, history):
-    message = (message or "").strip()
-    if not message:
-        return "", history, history
-
-    # Safely appends turn based on structure type
-    if isinstance(history, list) and len(history) > 0 and isinstance(history[0], dict):
-        new_history = history + [{"role": "user", "content": message}]
-    else:
-        new_history = history + [[message, ""]]
-        
-    return "", new_history, new_history
-
-def on_bot_reply(history, system_prompt, temperature, max_tokens, file_context):
+def web_search(query, max_results=5):
+    """Live web search using DuckDuckGo (no API key needed)."""
     try:
-        if not history:
-            yield history, history
-            return
+        from ddgs import DDGS
+        with DDGS() as ddgs:
+            results = list(ddgs.text(query, max_results=max_results))
+        if not results:
+            return ""
+        return "\n\n".join(
+            f"- {r.get('title','')}: {r.get('body','')} ({r.get('href','')})"
+            for r in results
+        )
+    except Exception as e:
+        return f"[Search Error: {str(e)}]"
 
-        messages = [{"role": "system", "content": system_prompt}]
+
+def respond(message, history, system_prompt, temperature, max_tokens, file_context, search_enabled):
+    try:
+        full_system_prompt = system_prompt
+
+        if search_enabled:
+            results = web_search(message)
+            if results and not results.startswith("[Search Error"):
+                full_system_prompt += (
+                    "\n\nHere are live web search results relevant to the user's message. "
+                    "Use them if helpful, and mention they're current info when relevant:\n\n" + results
+                )
 
         if file_context:
-            messages.append({
-                "role": "system",
-                "content": "The user has shared a file. Use it when relevant:\n\n" + file_context
-            })
+            full_system_prompt += (
+                "\n\nThe user has shared a file. Use its contents to answer questions "
+                "when relevant:\n\n" + file_context
+            )
 
-        # Dynamically inspect and parse state formats (dict vs list-of-lists)
-        is_dict_format = isinstance(history[0], dict) if isinstance(history, list) and len(history) > 0 else False
+        messages = [{"role": "system", "content": full_system_prompt}]
 
-        if is_dict_format:
-            # Handle list of dicts format
-            messages.extend(history[:-1])
-            active_message = history[-1].get("content", "")
-            
-            history = history + [{"role": "assistant", "content": ""}]
-            for partial in stream_answer(messages, temperature, max_tokens):
-                history[-1]["content"] = partial
-                yield history, history
-        else:
-            # Handle standard list-of-lists format
-            for turn in history[:-1]:
-                if turn[0]: messages.append({"role": "user", "content": turn[0]})
-                if turn[1]: messages.append({"role": "assistant", "content": turn[1]})
-            
-            active_message = history[-1][0]
-            messages.append({"role": "user", "content": active_message})
-            
-            for partial in stream_answer(messages, temperature, max_tokens):
-                history[-1][1] = partial
-                yield history, history
+        for item in history:
+            role = item.get("role")
+            content = item.get("content")
+            if role and content:
+                messages.append({"role": role, "content": content})
+
+        messages.append({"role": "user", "content": message})
+
+        response = ""
+        for token in client.chat_completion(
+            messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            stream=True
+        ):
+            token_text = token.choices[0].delta.content
+            if token_text:
+                response += token_text
+                yield response
 
     except Exception as e:
-        if isinstance(history[-1], dict):
-            history.append({"role": "assistant", "content": f"Error: {str(e)}"})
-        else:
-            history[-1][1] = f"Error: {str(e)}"
-        yield history, history
+        yield f"Error: {str(e)}"
 
-def on_voice_from_text(history):
-    if not history:
-        return None
-    try:
-        if isinstance(history[-1], dict):
-            last_reply = history[-1].get("content", "")
-        else:
-            last_reply = history[-1][1]
-        return speak(last_reply)
-    except Exception:
-        return None
+
+# --- CUSTOM UI WITH GR.BLOCKS ---
 
 custom_css = """
-footer {visibility: hidden;}
+footer {visibility: hidden}
 .gradio-container {background-color: #0b0f19;}
 """
 
-with gr.Blocks(css=custom_css, theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate")) as demo:
-    gr.Markdown("# ⚡ THUNDER WORKSPACE // Voice + Files v6.2")
-    gr.Markdown("Speak, type, or upload a file — Thunder handles all three features concurrently.")
+with gr.Blocks() as demo:
+    gr.Markdown("# ⚡ THUNDER WORKSPACE // Voice + Files + Search v7")
+    gr.Markdown("Speak, type, upload a file, or search the web — Thunder handles it all.")
 
-    # Let Gradio default the setup structure safely
-    chatbot = gr.Chatbot(height=500)
-    chat_state = gr.State([])
-    file_context = gr.State("")
-    system_prompt = gr.State(DEFAULT_SYSTEM_PROMPT)
-    temperature = gr.State(0.75)
-    max_tokens = gr.State(1024)
+    chatbot = gr.Chatbot(value=load_history())
 
     with gr.Row():
         msg = gr.Textbox(placeholder="Type your message here or speak into the microphone...", scale=7)
         send_btn = gr.Button("Send", scale=1)
+        audio_input = gr.Audio(sources=["microphone"], type="filepath", scale=4)
 
     with gr.Row():
-        audio_input = gr.Audio(type="filepath", label="Voice input")
-        reply_audio = gr.Audio(label="Thunder's voice", autoplay=True)
+        file_input = gr.File(label="📎 Upload a file (.pdf, .txt, .csv, .md, .json)", scale=6)
+        search_toggle = gr.Checkbox(label="🔍 Search the web for this", scale=2)
+        clear_btn = gr.Button("🗑️ Clear memory", scale=2)
 
-    with gr.Row():
-        file_input = gr.File(label="📎 Upload a file (.pdf, .txt, .csv, .md, .json)")
+    reply_audio = gr.Audio(label="🔊 Thunder's voice", autoplay=True)
 
     audio_input.change(transcribe, inputs=[audio_input], outputs=[msg])
+
+    # State
+    system_prompt = gr.State(DEFAULT_SYSTEM_PROMPT)
+    temperature = gr.State(0.75)
+    max_tokens = gr.State(1024)
+    file_context = gr.State("")
+
     file_input.change(read_file, inputs=[file_input], outputs=[file_context])
 
-    msg.submit(
-        on_user_submit, inputs=[msg, chat_state], outputs=[msg, chatbot, chat_state]
+    def user_send(message, history):
+        history = history + [{"role": "user", "content": message}]
+        save_message("user", message)
+        return "", history
+
+    def bot_reply(history, sys_prompt, temp, tokens, f_context, search_on):
+        message = history[-1]["content"]
+        history.append({"role": "assistant", "content": ""})
+        for chunk in respond(message, history[:-1], sys_prompt, temp, tokens, f_context, search_on):
+            history[-1]["content"] = chunk
+            yield history
+        save_message("assistant", history[-1]["content"])
+
+    def bot_speak(history):
+        last_reply = history[-1]["content"] if history else ""
+        return speak(last_reply)
+
+    def do_clear():
+        clear_history()
+        return []
+
+    msg.submit(user_send, [msg, chatbot], [msg, chatbot]).then(
+        bot_reply, [chatbot, system_prompt, temperature, max_tokens, file_context, search_toggle], chatbot
     ).then(
-        on_bot_reply, inputs=[chat_state, system_prompt, temperature, max_tokens, file_context], outputs=[chatbot, chat_state]
-    ).then(
-        on_voice_from_text, inputs=[chat_state], outputs=[reply_audio]
+        bot_speak, chatbot, reply_audio
     )
 
-    send_btn.click(
-        on_user_submit, inputs=[msg, chat_state], outputs=[msg, chatbot, chat_state]
+    send_btn.click(user_send, [msg, chatbot], [msg, chatbot]).then(
+        bot_reply, [chatbot, system_prompt, temperature, max_tokens, file_context, search_toggle], chatbot
     ).then(
-        on_bot_reply, inputs=[chat_state, system_prompt, temperature, max_tokens, file_context], outputs=[chatbot, chat_state]
-    ).then(
-        on_voice_from_text, inputs=[chat_state], outputs=[reply_audio]
+        bot_speak, chatbot, reply_audio
     )
+
+    clear_btn.click(do_clear, None, chatbot)
 
 port_number = int(os.environ.get("PORT", 10000))
-demo.queue().launch(server_name="0.0.0.0", server_port=port_number)
+demo.launch(
+    server_name="0.0.0.0",
+    server_port=port_number,
+    theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"),
+    css=custom_css,
+    )
