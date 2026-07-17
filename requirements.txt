@@ -1,4 +1,4 @@
-gradio
 huggingface_hub
+gradio
 pypdf
-ddgs
+duckduckgo_search
