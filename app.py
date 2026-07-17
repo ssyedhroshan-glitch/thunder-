@@ -16,9 +16,9 @@ DEFAULT_SYSTEM_PROMPT = (
     "You are Thunder, an elite, tech-savvy AI collaborator with a sharp mind and a touch of dry wit. "
     "You talk to the user as a brilliant, supportive peer and co-founder. "
     "Provide highly insightful, direct, and scannable answers using bold headers and clean bullet points. "
-    "Whether discussing advanced aerospace, semiconductor physics, or economics, break down complex concepts "
-    "with high technical accuracy but zero dry academic jargon. "
-    "Keep your tone authentic, grounded, and engaging. Never use robotic disclaimers."
+    "Break down complex concepts with high technical accuracy but zero dry academic jargon. "
+    "Keep your tone authentic, grounded, and engaging. Never use robotic disclaimers. "
+    "Only bring up a specific topic (aerospace, finance, code, etc.) if the user actually raises it."
 )
 
 # --- HELPER FUNCTIONS ---
@@ -123,7 +123,8 @@ with gr.Blocks() as demo:
     chatbot = gr.Chatbot()
 
     with gr.Row():
-        msg = gr.Textbox(placeholder="Type your message here or speak into the microphone...", scale=8)
+        msg = gr.Textbox(placeholder="Type your message here or speak into the microphone...", scale=7)
+        send_btn = gr.Button("Send", scale=1)
         audio_input = gr.Audio(sources=["microphone"], type="filepath", scale=4)
 
     with gr.Row():
@@ -161,6 +162,16 @@ with gr.Blocks() as demo:
         bot_speak, chatbot, reply_audio
     )
 
+    send_btn.click(user_send, [msg, chatbot], [msg, chatbot]).then(
+        bot_reply, [chatbot, system_prompt, temperature, max_tokens, file_context], chatbot
+    ).then(
+        bot_speak, chatbot, reply_audio
+    )
+
 port_number = int(os.environ.get("PORT", 10000))
-demo.launch(server_name="0.0.0.0", server_port=port_number, theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), css=custom_css)
-    
+demo.launch(
+    server_name="0.0.0.0",
+    server_port=port_number,
+    theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"),
+    css=custom_css,
+)
