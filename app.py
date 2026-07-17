@@ -1,7 +1,6 @@
 import os
 import tempfile
 import sqlite3
-import json
 import gradio as gr
 from huggingface_hub import InferenceClient
 
@@ -28,33 +27,16 @@ def init_db():
     conn.commit()
     conn.close()
 
-def load_history_as_list():
-    """Loads history in the exact format Gradio natively expects: [[user, bot]]."""
+def load_history_for_interface():
+    """Loads history into the explicit format gr.ChatInterface expects internally."""
     conn = sqlite3.connect(DB_PATH)
     rows = conn.execute("SELECT role, content FROM history ORDER BY id").fetchall()
     conn.close()
-    
-    chat_list = []
-    current_pair = [None, None]
-    
-    for role, content in rows:
-        if role == "user":
-            if current_pair[0] is not None:
-                chat_list.append(current_pair)
-                current_pair = [None, None]
-            current_pair[0] = content
-        elif role == "assistant":
-            current_pair[1] = content
-            chat_list.append(current_pair)
-            current_pair = [None, None]
-            
-    if current_pair[0] is not None:
-        chat_list.append(current_pair)
-        
-    return chat_list
+    return [{"role": r, "content": c} for r, c in rows]
 
 def save_message(role, content):
     conn = sqlite3.connect(DB_PATH)
+    conn.execute("INSERT TABLE IF NOT EXISTS history (role, content) VALUES (?, ?)", (role, content))
     conn.execute("INSERT INTO history (role, content) VALUES (?, ?)", (role, content))
     conn.commit()
     conn.close()
@@ -134,7 +116,7 @@ def read_file(file_path):
         return f"[File Read Error: {str(e)}]"
 
 def web_search(query, max_results=3):
-    """Live web search using DuckDuckGo (Fixed implementation)."""
+    """Live web search using DuckDuckGo."""
     try:
         from duckduckgo_search import DDGS
         with DDGS() as ddgs:
@@ -148,8 +130,13 @@ def web_search(query, max_results=3):
     except Exception as e:
         return f"[Search Error: {str(e)}]"
 
-def respond(message, history, system_prompt, temperature, max_tokens, file_context, search_enabled):
+# --- REWIRED HANDLER LOGIC FOR CHATINTERFACE ---
+
+def chat_handler(message, history, system_prompt, temperature, max_tokens, file_context, search_enabled):
     try:
+        # Save user text to the database right away
+        save_message("user", message)
+        
         full_system_prompt = system_prompt
 
         if search_enabled:
@@ -167,11 +154,12 @@ def respond(message, history, system_prompt, temperature, max_tokens, file_conte
 
         messages = [{"role": "system", "content": full_system_prompt}]
         
-        # Flawlessly convert list-of-lists layout to OpenAI/HF format
+        # Format the native internal history dictionary safely for OpenAI/HF endpoints
         for turn in history:
-            if isinstance(turn, (list, tuple)) and len(turn) >= 2:
-                if turn[0]: messages.append({"role": "user", "content": turn[0]})
-                if turn[1]: messages.append({"role": "assistant", "content": turn[1]})
+            user_content = turn.get("user", {}).get("text", "") if isinstance(turn, dict) else turn[0]
+            bot_content = turn.get("assistant", {}).get("text", "") if isinstance(turn, dict) else turn[1]
+            if user_content: messages.append({"role": "user", "content": user_content})
+            if bot_content: messages.append({"role": "assistant", "content": bot_content})
 
         messages.append({"role": "user", "content": message})
 
@@ -186,11 +174,15 @@ def respond(message, history, system_prompt, temperature, max_tokens, file_conte
             if token_text:
                 response += token_text
                 yield response
+                
+        # Persist full assistant generation once streaming is done
+        if response:
+            save_message("assistant", response)
 
     except Exception as e:
         yield f"Error: {str(e)}"
 
-# --- CUSTOM UI WITH GR.BLOCKS ---
+# --- CUSTOM UI DESIGN WITH GR.BLOCKS ---
 
 custom_css = """
 footer {visibility: hidden}
@@ -198,75 +190,59 @@ footer {visibility: hidden}
 """
 
 with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), css=custom_css) as demo:
-    gr.Markdown("# ⚡ THUNDER WORKSPACE // Core v7.2")
-    gr.Markdown("Production Environment. Speak, type text, scan files, or toggle real-time query engines simultaneously.")
+    gr.Markdown("# ⚡ THUNDER WORKSPACE // Core v8.0")
+    gr.Markdown("Production Environment. Seamless text processing, file parsing, web scraping, and speech nodes running concurrently.")
 
-    chatbot = gr.Chatbot(value=load_history_as_list(), height=500)
-
-    with gr.Row():
-        msg = gr.Textbox(placeholder="Type your message here or speak into the microphone...", scale=7)
-        send_btn = gr.Button("Send", scale=1)
-        audio_input = gr.Audio(source="microphone", type="filepath", scale=4)
-
-    with gr.Row():
-        file_input = gr.File(label="📎 Upload a file (.pdf, .txt, .csv, .md, .json)", scale=6)
-        search_toggle = gr.Checkbox(label="🔍 Search the web for this", scale=2)
-        clear_btn = gr.Button("🗑️ Clear memory", scale=2)
-
-    reply_audio = gr.Audio(label="🔊 Thunder's voice", autoplay=True)
-
-    audio_input.change(transcribe, inputs=[audio_input], outputs=[msg])
-
-    # Persistent State Declarations
+    # Shared State Variables
     system_prompt = gr.State(DEFAULT_SYSTEM_PROMPT)
     temperature = gr.State(0.75)
     max_tokens = gr.State(1024)
     file_context = gr.State("")
 
-    file_input.change(read_file, inputs=[file_input], outputs=[file_context])
-
-    def user_send(message, history):
-        message = (message or "").strip()
-        if not message:
-            return "", history
-        save_message("user", message)
-        return "", history + [[message, ""]]
-
-    def bot_reply(history, sys_prompt, temp, tokens, f_context, search_on):
-        if not history:
-            yield history
-            return
-        message = history[-1][0]
-        api_history = history[:-1]
-        
-        for chunk in respond(message, api_history, sys_prompt, temp, tokens, f_context, search_on):
-            history[-1][1] = chunk
-            yield history
+    with gr.Row():
+        with gr.Column(scale=9):
+            # Safe Native Interface handling 
+            chat_ui = gr.ChatInterface(
+                fn=chat_handler,
+                additional_inputs=[system_prompt, temperature, max_tokens, file_context],
+                type="messages",
+                fill_height=True
+            )
+        with gr.Column(scale=3):
+            gr.Markdown("### 📎 Workspace Tools")
+            file_input = gr.File(label="Upload context file (.pdf, .txt, .csv, .md, .json)")
+            search_toggle = gr.Checkbox(label="🔍 Search web on prompt", value=False)
             
-        save_message("assistant", history[-1][1])
+            gr.Markdown("### 🔊 Audio Interface Node")
+            audio_input = gr.Audio(source="microphone", type="filepath", label="Voice input mic")
+            reply_audio = gr.Audio(label="Thunder Synthesized Output", autoplay=True)
+            voice_trigger_btn = gr.Button("🔊 Speak Last Reply")
+            
+            clear_memory_btn = gr.Button("🗑️ Clear Database Memory", variant="stop")
 
-    def bot_speak(history):
-        if history and history[-1][1]:
-            return speak(history[-1][1])
+    # Connect component functions safely
+    file_input.change(read_file, inputs=[file_input], outputs=[file_context])
+    
+    # Send transcribed audio text into ChatInterface textbox input
+    audio_input.change(transcribe, inputs=[audio_input], outputs=[chat_ui.textbox])
+
+    # Dynamic Audio Speech Synthesizer Function
+    def trigger_speech():
+        conn = sqlite3.connect(DB_PATH)
+        last_bot_reply = conn.execute("SELECT content FROM history WHERE role='assistant' ORDER BY id DESC LIMIT 1").fetchone()
+        conn.close()
+        if last_bot_reply:
+            return speak(last_bot_reply[0])
         return None
+
+    voice_trigger_btn.click(trigger_speech, None, reply_audio)
 
     def do_clear():
         clear_history()
-        return []
+        return None
 
-    msg.submit(user_send, [msg, chatbot], [msg, chatbot]).then(
-        bot_reply, [chatbot, system_prompt, temperature, max_tokens, file_context, search_toggle], chatbot
-    ).then(
-        bot_speak, chatbot, reply_audio
-    )
+    clear_memory_btn.click(do_clear, None, chat_ui.chatbot)
 
-    send_btn.click(user_send, [msg, chatbot], [msg, chatbot]).then(
-        bot_reply, [chatbot, system_prompt, temperature, max_tokens, file_context, search_toggle], chatbot
-    ).then(
-        bot_speak, chatbot, reply_audio
-    )
-
-    clear_btn.click(do_clear, None, chatbot)
-
+# Port setup tracking
 port_number = int(os.environ.get("PORT", 10000))
 demo.queue(concurrency_count=3).launch(server_name="0.0.0.0", server_port=port_number)
