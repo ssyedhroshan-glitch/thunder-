@@ -116,11 +116,11 @@ footer {visibility: hidden}
 .gradio-container {background-color: #0b0f19;}
 """
 
-with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), css=custom_css) as demo:
+with gr.Blocks() as demo:
     gr.Markdown("# ⚡ THUNDER WORKSPACE // Voice + Files v6")
     gr.Markdown("Speak, type, or upload a file — Thunder handles all three.")
 
-    chatbot = gr.Chatbot(type="messages")
+    chatbot = gr.Chatbot()
 
     with gr.Row():
         msg = gr.Textbox(placeholder="Type your message here or speak into the microphone...", scale=8)
@@ -162,5 +162,5 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
     )
 
 port_number = int(os.environ.get("PORT", 10000))
-demo.launch(server_name="0.0.0.0", server_port=port_number)
+demo.launch(server_name="0.0.0.0", server_port=port_number, theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), css=custom_css)
     
