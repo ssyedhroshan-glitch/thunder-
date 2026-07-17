@@ -1,4 +1,4 @@
 gradio
 huggingface_hub
 pypdf
-beautifulsoup4
+ddgs
