@@ -39,33 +39,39 @@ def speak(text):
     if not text:
         return None
     try:
-        audio_bytes = tts_client.text_to_speech(text)
+        # Strip markdown elements so the text-to-speech engine speaks smoothly
+        clean_text = text.replace("*", "").replace("#", "").replace("- ", "")
+        if len(clean_text) > 300:  
+            clean_text = clean_text[:300] + "..."
+            
+        audio_bytes = tts_client.text_to_speech(clean_text)
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
         tmp.write(audio_bytes)
         tmp.close()
         return tmp.name
     except Exception:
-        # If TTS fails, just skip audio rather than breaking the chat
         return None
 
 
 def read_file(file_path):
-    """File reading: extract text from an uploaded file so Thunder can use it as context."""
+    """File reading: extract text from an uploaded file."""
     if file_path is None:
         return ""
     try:
         ext = os.path.splitext(file_path)[1].lower()
         if ext == ".pdf":
-            from pypdf import PdfReader
-            reader = PdfReader(file_path)
-            text = "\n".join(page.extract_text() or "" for page in reader.pages)
+            try:
+                from pypdf import PdfReader
+                reader = PdfReader(file_path)
+                text = "\n".join(page.extract_text() or "" for page in reader.pages)
+            except ImportError:
+                return "[Error: Please add pypdf to requirements.txt]"
         elif ext in (".txt", ".md", ".csv", ".py", ".json"):
             with open(file_path, "r", errors="ignore") as f:
                 text = f.read()
         else:
             return f"[Unsupported file type: {ext}]"
 
-        # Keep it from blowing up the context window
         max_chars = 12000
         if len(text) > max_chars:
             text = text[:max_chars] + "\n...[truncated]"
@@ -85,11 +91,13 @@ def respond(message, history, system_prompt, temperature, max_tokens, file_conte
 
         messages = [{"role": "system", "content": full_system_prompt}]
 
-        for item in history:
-            role = item.get("role")
-            content = item.get("content")
-            if role and content:
-                messages.append({"role": role, "content": content})
+        # FIXED: Safely parsing standard list history [[user, bot]] to eliminate '.get' errors
+        for turn in history:
+            if isinstance(turn, (list, tuple)) and len(turn) >= 2:
+                if turn[0]:
+                    messages.append({"role": "user", "content": turn[0]})
+                if turn[1]:
+                    messages.append({"role": "assistant", "content": turn[1]})
 
         messages.append({"role": "user", "content": message})
 
@@ -116,7 +124,7 @@ footer {visibility: hidden}
 .gradio-container {background-color: #0b0f19;}
 """
 
-with gr.Blocks() as demo:
+with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), css=custom_css) as demo:
     gr.Markdown("# ⚡ THUNDER WORKSPACE // Voice + Files v6")
     gr.Markdown("Speak, type, or upload a file — Thunder handles all three.")
 
@@ -125,7 +133,7 @@ with gr.Blocks() as demo:
     with gr.Row():
         msg = gr.Textbox(placeholder="Type your message here or speak into the microphone...", scale=7)
         send_btn = gr.Button("Send", scale=1)
-        audio_input = gr.Audio(sources=["microphone"], type="filepath", scale=4)
+        audio_input = gr.Audio(source="microphone", type="filepath", scale=4)
 
     with gr.Row():
         file_input = gr.File(label="📎 Upload a file (.pdf, .txt, .csv, .md, .json)", scale=8)
@@ -133,7 +141,7 @@ with gr.Blocks() as demo:
 
     audio_input.change(transcribe, inputs=[audio_input], outputs=[msg])
 
-    # State
+    # State Variables
     system_prompt = gr.State(DEFAULT_SYSTEM_PROMPT)
     temperature = gr.State(0.75)
     max_tokens = gr.State(1024)
@@ -141,27 +149,37 @@ with gr.Blocks() as demo:
 
     file_input.change(read_file, inputs=[file_input], outputs=[file_context])
 
+    # FIXED: Handling history transitions smoothly
     def user_send(message, history):
-        history = history + [{"role": "user", "content": message}]
-        return "", history
+        if history is None:
+            history = []
+        return "", history + [[message, ""]]
 
     def bot_reply(history, sys_prompt, temp, tokens, f_context):
-        message = history[-1]["content"]
-        history.append({"role": "assistant", "content": ""})
-        for chunk in respond(message, history[:-1], sys_prompt, temp, tokens, f_context):
-            history[-1]["content"] = chunk
+        if not history:
+            yield history
+            return
+        message = history[-1][0]
+        api_history = history[:-1]
+        
+        for chunk in respond(message, api_history, sys_prompt, temp, tokens, f_context):
+            history[-1][1] = chunk
             yield history
 
     def bot_speak(history):
-        last_reply = history[-1]["content"] if history else ""
-        return speak(last_reply)
+        if history and len(history[-1]) >= 2:
+            last_reply = history[-1][1]
+            return speak(last_reply)
+        return None
 
+    # Submit actions for Text Box
     msg.submit(user_send, [msg, chatbot], [msg, chatbot]).then(
         bot_reply, [chatbot, system_prompt, temperature, max_tokens, file_context], chatbot
     ).then(
         bot_speak, chatbot, reply_audio
     )
 
+    # Submit actions for Send Button
     send_btn.click(user_send, [msg, chatbot], [msg, chatbot]).then(
         bot_reply, [chatbot, system_prompt, temperature, max_tokens, file_context], chatbot
     ).then(
@@ -169,9 +187,4 @@ with gr.Blocks() as demo:
     )
 
 port_number = int(os.environ.get("PORT", 10000))
-demo.launch(
-    server_name="0.0.0.0",
-    server_port=port_number,
-    theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"),
-    css=custom_css,
-)
+demo.launch(server_name="0.0.0.0", server_port=port_number)
