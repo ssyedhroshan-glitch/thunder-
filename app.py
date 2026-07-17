@@ -3,48 +3,45 @@ import tempfile
 import gradio as gr
 from huggingface_hub import InferenceClient
 
-# Securely retrieve your Hugging Face token
-hf_token = os.environ.get("HF_TOKEN")
+HF_TOKEN = os.environ.get("HF_TOKEN")
 
-# Initialize the Hugging Face clients
-client = InferenceClient("Qwen/Qwen2.5-7B-Instruct", token=hf_token)
-whisper_client = InferenceClient("openai/whisper-large-v3", token=hf_token)
-tts_client = InferenceClient("microsoft/speecht5_tts", token=hf_token)
+client = InferenceClient(
+    model="Qwen/Qwen2.5-7B-Instruct",
+    token=HF_TOKEN
+)
+whisper_client = InferenceClient(
+    model="openai/whisper-large-v3",
+    token=HF_TOKEN
+)
+tts_client = InferenceClient(
+    model="microsoft/speecht5_tts",
+    token=HF_TOKEN
+)
 
-# The Brain: Custom peer system prompt
 DEFAULT_SYSTEM_PROMPT = (
     "You are Thunder, an elite, tech-savvy AI collaborator with a sharp mind and a touch of dry wit. "
     "You talk to the user as a brilliant, supportive peer and co-founder. "
-    "Provide highly insightful, direct, and scannable answers using bold headers and clean bullet points. "
+    "Provide highly insightful, direct, and scannable answers using clear headings and clean bullet points. "
     "Break down complex concepts with high technical accuracy but zero dry academic jargon. "
-    "Keep your tone authentic, grounded, and engaging. Never use robotic disclaimers. "
-    "Only bring up a specific topic (aerospace, finance, code, etc.) if the user actually raises it."
+    "Keep your tone authentic, grounded, and engaging. "
+    "Never use robotic disclaimers. "
+    "Only bring up a specific topic if the user actually raises it."
 )
 
-# --- HELPER FUNCTIONS ---
-
 def transcribe(audio_path):
-    """Voice input: turn recorded speech into text."""
-    if audio_path is None:
+    if not audio_path:
         return ""
     try:
         result = whisper_client.automatic_speech_recognition(audio_path)
-        return result.text
+        return result.text if hasattr(result, "text") else str(result)
     except Exception as e:
         return f"[Transcription Error: {str(e)}]"
 
-
 def speak(text):
-    """Voice output: turn Thunder's reply into playable audio."""
     if not text:
         return None
     try:
-        # Strip markdown elements so the text-to-speech engine speaks smoothly
-        clean_text = text.replace("*", "").replace("#", "").replace("- ", "")
-        if len(clean_text) > 300:  
-            clean_text = clean_text[:300] + "..."
-            
-        audio_bytes = tts_client.text_to_speech(clean_text)
+        audio_bytes = tts_client.text_to_speech(text)
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
         tmp.write(audio_bytes)
         tmp.close()
@@ -52,21 +49,19 @@ def speak(text):
     except Exception:
         return None
 
-
-def read_file(file_path):
-    """File reading: extract text from an uploaded file."""
-    if file_path is None:
+def read_file(file_obj):
+    if file_obj is None:
         return ""
     try:
+        file_path = file_obj.name if hasattr(file_obj, "name") else file_obj
         ext = os.path.splitext(file_path)[1].lower()
+
         if ext == ".pdf":
-            try:
-                from pypdf import PdfReader
-                reader = PdfReader(file_path)
-                text = "\n".join(page.extract_text() or "" for page in reader.pages)
-            except ImportError:
-                return "[Error: Please add pypdf to requirements.txt]"
-        elif ext in (".txt", ".md", ".csv", ".py", ".json"):
+            from pypdf import PdfReader
+            reader = PdfReader(file_path)
+            text = "
+".join(page.extract_text() or "" for page in reader.pages)
+        elif ext in [".txt", ".md", ".csv", ".py", ".json"]:
             with open(file_path, "r", errors="ignore") as f:
                 text = f.read()
         else:
@@ -74,117 +69,146 @@ def read_file(file_path):
 
         max_chars = 12000
         if len(text) > max_chars:
-            text = text[:max_chars] + "\n...[truncated]"
+            text = text[:max_chars] + "
+...[truncated]"
         return text
     except Exception as e:
         return f"[File Read Error: {str(e)}]"
 
+def stream_answer(messages, temperature, max_tokens):
+    response = ""
+    for chunk in client.chat_completion(
+        messages,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        stream=True,
+    ):
+        token_text = chunk.choices[0].delta.content or ""
+        response += token_text
+        yield response
 
-def respond(message, history, system_prompt, temperature, max_tokens, file_context):
+def on_user_submit(message, history):
+    message = (message or "").strip()
+    if not message:
+        return "", history, history
+
+    history = history + [{"role": "user", "content": message}]
+    return "", history, history
+
+def on_bot_reply(history, system_prompt, temperature, max_tokens, file_context):
     try:
-        full_system_prompt = system_prompt
+        if not history:
+            return history, history
+
+        messages = [{"role": "system", "content": system_prompt}]
+
         if file_context:
-            full_system_prompt += (
-                "\n\nThe user has shared a file. Use its contents to answer questions "
-                "when relevant:\n\n" + file_context
-            )
+            messages.append({
+                "role": "system",
+                "content": "The user has shared a file. Use it when relevant:
 
-        messages = [{"role": "system", "content": full_system_prompt}]
+" + file_context
+            })
 
-        # FIXED: Safely parsing standard list history [[user, bot]] to eliminate '.get' errors
-        for turn in history:
-            if isinstance(turn, (list, tuple)) and len(turn) >= 2:
-                if turn[0]:
-                    messages.append({"role": "user", "content": turn[0]})
-                if turn[1]:
-                    messages.append({"role": "assistant", "content": turn[1]})
+        messages.extend(history)
 
-        messages.append({"role": "user", "content": message})
+        history = history + [{"role": "assistant", "content": ""}]
+        assistant_text = ""
 
-        response = ""
-        for token in client.chat_completion(
-            messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            stream=True
-        ):
-            token_text = token.choices[0].delta.content
-            if token_text:
-                response += token_text
-                yield response
+        for partial in stream_answer(messages, temperature, max_tokens):
+            assistant_text = partial
+            history[-1]["content"] = assistant_text
+            yield history, history
 
     except Exception as e:
-        yield f"Error: {str(e)}"
+        history = history + [{"role": "assistant", "content": f"Error: {str(e)}"}]
+        yield history, history
 
+def on_voice_from_text(history):
+    if not history:
+        return None
+    last = history[-1]["content"]
+    return speak(last)
 
-# --- CUSTOM UI WITH GR.BLOCKS ---
+def on_audio_to_text(audio_path):
+    return transcribe(audio_path)
+
+def on_file_to_context(file_obj):
+    return read_file(file_obj)
 
 custom_css = """
-footer {visibility: hidden}
+footer {visibility: hidden;}
 .gradio-container {background-color: #0b0f19;}
 """
 
-with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), css=custom_css) as demo:
+with gr.Blocks(css=custom_css, theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate")) as demo:
     gr.Markdown("# ⚡ THUNDER WORKSPACE // Voice + Files v6")
     gr.Markdown("Speak, type, or upload a file — Thunder handles all three.")
 
-    chatbot = gr.Chatbot()
-
-    with gr.Row():
-        msg = gr.Textbox(placeholder="Type your message here or speak into the microphone...", scale=7)
-        send_btn = gr.Button("Send", scale=1)
-        audio_input = gr.Audio(source="microphone", type="filepath", scale=4)
-
-    with gr.Row():
-        file_input = gr.File(label="📎 Upload a file (.pdf, .txt, .csv, .md, .json)", scale=8)
-        reply_audio = gr.Audio(label="🔊 Thunder's voice", autoplay=True, scale=4)
-
-    audio_input.change(transcribe, inputs=[audio_input], outputs=[msg])
-
-    # State Variables
+    chatbot = gr.Chatbot(type="messages", height=500)
+    chat_state = gr.State([])
+    file_context = gr.State("")
     system_prompt = gr.State(DEFAULT_SYSTEM_PROMPT)
     temperature = gr.State(0.75)
     max_tokens = gr.State(1024)
-    file_context = gr.State("")
 
-    file_input.change(read_file, inputs=[file_input], outputs=[file_context])
+    with gr.Row():
+        msg = gr.Textbox(
+            placeholder="Type your message here or speak into the microphone...",
+            scale=7
+        )
+        send_btn = gr.Button("Send", scale=1)
 
-    # FIXED: Handling history transitions smoothly
-    def user_send(message, history):
-        if history is None:
-            history = []
-        return "", history + [[message, ""]]
+    with gr.Row():
+        audio_input = gr.Audio(sources=["microphone"], type="filepath", label="Voice input")
+        reply_audio = gr.Audio(label="Thunder's voice", autoplay=True)
 
-    def bot_reply(history, sys_prompt, temp, tokens, f_context):
-        if not history:
-            yield history
-            return
-        message = history[-1][0]
-        api_history = history[:-1]
-        
-        for chunk in respond(message, api_history, sys_prompt, temp, tokens, f_context):
-            history[-1][1] = chunk
-            yield history
+    with gr.Row():
+        file_input = gr.File(label="📎 Upload a file (.pdf, .txt, .csv, .md, .json)")
 
-    def bot_speak(history):
-        if history and len(history[-1]) >= 2:
-            last_reply = history[-1][1]
-            return speak(last_reply)
-        return None
-
-    # Submit actions for Text Box
-    msg.submit(user_send, [msg, chatbot], [msg, chatbot]).then(
-        bot_reply, [chatbot, system_prompt, temperature, max_tokens, file_context], chatbot
-    ).then(
-        bot_speak, chatbot, reply_audio
+    audio_input.change(
+        on_audio_to_text,
+        inputs=[audio_input],
+        outputs=[msg],
     )
 
-    # Submit actions for Send Button
-    send_btn.click(user_send, [msg, chatbot], [msg, chatbot]).then(
-        bot_reply, [chatbot, system_prompt, temperature, max_tokens, file_context], chatbot
-    ).then(
-        bot_speak, chatbot, reply_audio
+    file_input.change(
+        on_file_to_context,
+        inputs=[file_input],
+        outputs=[file_context],
     )
 
-port_number = int(os.environ.get("PORT", 10000))
-demo.launch(server_name="0.0.0.0", server_port=port_number)
+    msg.submit(
+        on_user_submit,
+        inputs=[msg, chat_state],
+        outputs=[msg, chatbot, chat_state],
+    ).then(
+        on_bot_reply,
+        inputs=[chat_state, system_prompt, temperature, max_tokens, file_context],
+        outputs=[chatbot, chat_state],
+    ).then(
+        on_voice_from_text,
+        inputs=[chat_state],
+        outputs=[reply_audio],
+    )
+
+    send_btn.click(
+        on_user_submit,
+        inputs=[msg, chat_state],
+        outputs=[msg, chatbot, chat_state],
+    ).then(
+        on_bot_reply,
+        inputs=[chat_state, system_prompt, temperature, max_tokens, file_context],
+        outputs=[chatbot, chat_state],
+    ).then(
+        on_voice_from_text,
+        inputs=[chat_state],
+        outputs=[reply_audio],
+    )
+
+port_number = int(os.environ.get("PORT", 7860))
+
+demo.queue().launch(
+    server_name="0.0.0.0",
+    server_port=port_number,
+                )
