@@ -1,6 +1,8 @@
 import os
 import tempfile
 import gradio as gr
+import urllib.request
+import json
 from huggingface_hub import InferenceClient
 
 # Securely retrieve your Hugging Face token
@@ -13,15 +15,44 @@ tts_client = InferenceClient("microsoft/speecht5_tts", token=hf_token)
 
 # The Brain: Custom peer system prompt
 DEFAULT_SYSTEM_PROMPT = (
-    "You are Thunder, an elite, tech-savvy AI collaborator with a sharp mind and a touch of dry wit. "
+    "You are Thunder, an elite, tech-savvy AI collaborator with web-search capabilities. "
     "You talk to the user as a brilliant, supportive peer and co-founder. "
     "Provide highly insightful, direct, and scannable answers using bold headers and clean bullet points. "
-    "Break down complex concepts with high technical accuracy but zero dry academic jargon. "
-    "Keep your tone authentic, grounded, and engaging. Never use robotic disclaimers. "
-    "Only bring up a specific topic (aerospace, finance, code, etc.) if the user actually raises it."
+    "When web context is provided, naturally synthesize it to give accurate, up-to-date real-time info. "
+    "Keep your tone authentic, grounded, and engaging. Never use robotic disclaimers."
 )
 
 # --- HELPER FUNCTIONS ---
+
+def web_search(query):
+    """Perplexity Feature: Performs a quick live web search using a free engine."""
+    if not query or len(query.strip()) < 3:
+        return ""
+    try:
+        # Using a free, privacy-friendly text search API
+        safe_query = urllib.parse.quote_plus(query)
+        url = f"https://html.duckduckgo.com/html/?q={safe_query}"
+        
+        req = urllib.request.Request(
+            url, 
+            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        )
+        
+        with urllib.request.urlopen(req, timeout=5) as response:
+            html = response.read().decode('utf-8')
+            
+        # Quick fallback extraction of raw text snippets from search page
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, 'html.parser')
+        snippets = []
+        for result in soup.find_all('a', class_='result__snippet')[:3]:
+            snippets.append(result.get_text())
+            
+        if snippets:
+            return "\n[Live Web Context Found]:\n" + "\n".join(f"- {s}" for s in snippets)
+    except Exception:
+        pass
+    return ""
 
 def speak(text):
     """Voice output: turn Thunder's reply into playable audio."""
@@ -42,29 +73,32 @@ def speak(text):
 
 def respond(message, history):
     try:
-        # Build standard system prompt setup
-        messages = [{"role": "system", "content": DEFAULT_SYSTEM_PROMPT}]
+        # 1. Trigger Perplexity Web Search feature automatically for queries
+        user_message = message
+        if isinstance(message, dict):
+            user_message = message.get("text", "")
+            
+        web_context = web_search(user_message)
+        
+        # 2. Build system prompt with live search results injected
+        full_prompt = DEFAULT_SYSTEM_PROMPT
+        if web_context:
+            full_prompt += f"\n\n{web_context}"
 
-        # Clean history iteration protecting against data layout changes
+        messages = [{"role": "system", "content": full_prompt}]
+
+        # 3. Clean history management
         for turn in history:
             if isinstance(turn, (list, tuple)) and len(turn) >= 2:
                 if turn[0]:
                     messages.append({"role": "user", "content": turn[0]})
                 if turn[1]:
                     messages.append({"role": "assistant", "content": turn[1]})
-            elif isinstance(turn, dict):
-                role = turn.get("role")
-                content = turn.get("content")
-                if role and content:
-                    messages.append({"role": role, "content": content})
 
-        # Process standard input strings or files wrapped as dict inputs
-        user_message = message
         if isinstance(message, dict):
-            user_message = message.get("text", "")
             files = message.get("files", [])
             if files:
-                user_message += f"\n\n[User uploaded a file attachment]"
+                user_message += f"\n\n[User attached a file]"
 
         messages.append({"role": "user", "content": user_message})
 
@@ -84,23 +118,21 @@ def respond(message, history):
         yield f"Error: {str(e)}"
 
 
-# --- INTERFACE WITH STABLE WRAPPERS ---
+# --- INTERFACE ---
 
 custom_css = """
 footer {visibility: hidden}
 .gradio-container {background-color: #0b0f19;}
 """
 
-# Using the native ChatInterface completely avoids structural data type mismatch crashes
 demo = gr.ChatInterface(
     fn=respond,
-    title="⚡ THUNDER WORKSPACE // Voice + Files v6.1",
-    description="Mission Control. Speak, type text, or upload attachments natively.",
+    title="⚡ THUNDER WORKSPACE // Live Search v7.0",
+    description="Mission Control. Voice input, File uploading, and Real-time web search combined.",
     css=custom_css,
     theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"),
-    textbox=gr.Textbox(placeholder="Type your message or use your browser/device microphone button...", container=True, scale=7),
+    textbox=gr.Textbox(placeholder="Type anything (e.g., 'What is the stock price of Apple today?') or record audio...", container=True, scale=7),
 )
 
-# Bind and launch on Render port
 port_number = int(os.environ.get("PORT", 10000))
 demo.launch(server_name="0.0.0.0", server_port=port_number)
