@@ -143,7 +143,7 @@ def stream_reply(messages, temperature, max_tokens):
         text += part
         yield text
 
-# --- CORE INTERFACE STYLING (v12.2 NESTED SPECIFICATION) ---
+# --- CORE INTERFACE STYLING (v12.5 MATRIX BUILD) ---
 custom_css = """
 footer {visibility: hidden;}
 .gradio-container {background-color: #0b0f19;}
@@ -156,7 +156,7 @@ footer {visibility: hidden;}
     background-color: #1a202c !important;
     border: 1px solid #2e3748 !important;
     border-radius: 28px !important;
-    padding: 2px 10px !important;
+    padding: 4px 14px !important;
 }
 
 /* Eliminate default inner padding blocks from individual elements */
@@ -166,6 +166,15 @@ footer {visibility: hidden;}
     background: transparent !important;
     border: none !important;
     box-shadow: none !important;
+}
+
+/* Adjust layout structure for the inside row */
+.unified-bar-container .row-container {
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    width: 100% !important;
+    gap: 8px !important;
 }
 
 /* Tightly packs the left-aligned file uploader element */
@@ -196,7 +205,7 @@ footer {visibility: hidden;}
 }
 
 .utility-row {
-    margin-top: 6px !important;
+    margin-top: 8px !important;
 }
 .settings-box {
     margin-top: 8px;
@@ -208,7 +217,7 @@ footer {visibility: hidden;}
 """
 
 with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), css=custom_css) as demo:
-    gr.Markdown("# ⚡ THUNDER WORKSPACE // Core v12.2")
+    gr.Markdown("# ⚡ THUNDER WORKSPACE // Core v12.5")
 
     session_id = gr.State(None)
     chatbot = gr.Chatbot(type="messages", height=440)
@@ -216,15 +225,15 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
 
     # UNIFIED NESTED LAYOUT PILL
     with gr.Group(elem_classes=["unified-bar-container"]):
-        with gr.Row():
+        with gr.Row(elem_classes=["row-container"]):
             # LEFT SIDE: Integrated File Attachment Button
-            file_input = gr.File(show_label=False, scale=1, file_count="single", container=False, min_width=45)
+            file_input = gr.File(show_label=False, scale=1, file_count="single", container=False, min_width=40)
             
             # CENTER: Central Text Entry Window
-            msg = gr.Textbox(placeholder="Type message or speak...", show_label=False, scale=8, container=False)
+            msg = gr.Textbox(placeholder="Type message or speak...", show_label=False, scale=7, container=False)
             
             # RIGHT SIDE: Voice Microphone & Lightning Action Button
-            audio_input = gr.Audio(sources=["microphone"], type="filepath", show_label=False, scale=1, container=False, min_width=45)
+            audio_input = gr.Audio(sources=["microphone"], type="filepath", show_label=False, scale=1, container=False, min_width=40)
             send_btn = gr.Button("⚡", scale=1, elem_classes=["thunder-action-btn"])
 
     # OVERLAY TOGGLES LAYER
@@ -245,11 +254,12 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
 
     def start_session():
         sid = str(uuid.uuid4())
-        return sid, load_history(sid), []
+        initial_history = load_history(sid)
+        return sid, initial_history, initial_history
 
     demo.load(start_session, None, [session_id, chatbot, chat_state])
 
-    # Dynamic settings toggle mapping switch
+    # Dynamic settings drawer toggle link
     settings_toggle.change(lambda visible: gr.update(visible=visible), inputs=[settings_toggle], outputs=[settings_panel])
 
     def on_audio(audio_path):
