@@ -122,7 +122,7 @@ def web_search(query, max_results=3):
     except Exception as e:
         return f"[Search Error: {str(e)}]"
 
-# --- HANDLER LOGIC ---
+# --- STABLE CHAT PROCESSING LOGIC ---
 
 def chat_handler(message, history, system_prompt, temperature, max_tokens, file_context, search_enabled):
     try:
@@ -145,11 +145,16 @@ def chat_handler(message, history, system_prompt, temperature, max_tokens, file_
 
         messages = [{"role": "system", "content": full_system_prompt}]
         
+        # Explicit type conversion parsing rules to match type="messages" format safely
         for turn in history:
-            user_content = turn.get("user", {}).get("text", "") if isinstance(turn, dict) else turn[0]
-            bot_content = turn.get("assistant", {}).get("text", "") if isinstance(turn, dict) else turn[1]
-            if user_content: messages.append({"role": "user", "content": user_content})
-            if bot_content: messages.append({"role": "assistant", "content": bot_content})
+            if isinstance(turn, dict):
+                role = turn.get("role")
+                content = turn.get("content")
+                if role and content:
+                    messages.append({"role": role, "content": content})
+            elif isinstance(turn, (list, tuple)) and len(turn) >= 2:
+                if turn[0]: messages.append({"role": "user", "content": turn[0]})
+                if turn[1]: messages.append({"role": "assistant", "content": turn[1]})
 
         messages.append({"role": "user", "content": message})
 
@@ -169,9 +174,9 @@ def chat_handler(message, history, system_prompt, temperature, max_tokens, file_
             save_message("assistant", response)
 
     except Exception as e:
-        yield f"Error: {str(e)}"
+        yield f"Error encountered during runtime execution: {str(e)}"
 
-# --- CUSTOM UI DESIGN ---
+# --- CUSTOM BLOCK INTERFACE LAYOUT ---
 
 custom_css = """
 footer {visibility: hidden}
@@ -179,8 +184,8 @@ footer {visibility: hidden}
 """
 
 with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), css=custom_css) as demo:
-    gr.Markdown("# ⚡ THUNDER WORKSPACE // Core v8.1")
-    gr.Markdown("Production Environment. Text processing, file parsing, web scraping, and speech nodes active.")
+    gr.Markdown("# ⚡ THUNDER WORKSPACE // Core v8.2")
+    gr.Markdown("Production Environment. Fully synchronized file analysis, network scrape layers, and high-speed chat pipeline.")
 
     system_prompt = gr.State(DEFAULT_SYSTEM_PROMPT)
     temperature = gr.State(0.75)
@@ -196,17 +201,18 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
                 fill_height=True
             )
         with gr.Column(scale=3):
-            gr.Markdown("### 📎 Workspace Tools")
-            file_input = gr.File(label="Upload context file (.pdf, .txt, .csv, .md, .json)")
+            gr.Markdown("### 📎 Workspace Context Tools")
+            file_input = gr.File(label="Upload configuration context file (.pdf, .txt, .csv, .md, .json)")
             search_toggle = gr.Checkbox(label="🔍 Search web on prompt", value=False)
             
-            gr.Markdown("### 🔊 Audio Interface Node")
-            audio_input = gr.Audio(source="microphone", type="filepath", label="Voice input mic")
-            reply_audio = gr.Audio(label="Thunder Synthesized Output", autoplay=True)
+            gr.Markdown("### 🔊 Audio & Speech Processing Node")
+            audio_input = gr.Audio(source="microphone", type="filepath", label="Voice mic array input")
+            reply_audio = gr.Audio(label="Thunder Vocal Array Output", autoplay=True)
             voice_trigger_btn = gr.Button("🔊 Speak Last Reply")
             
-            clear_memory_btn = gr.Button("🗑️ Clear Database Memory", variant="stop")
+            clear_memory_btn = gr.Button("🗑️ Reset Database State Memory", variant="stop")
 
+    # Hook component triggers explicitly 
     file_input.change(read_file, inputs=[file_input], outputs=[file_context])
     audio_input.change(transcribe, inputs=[audio_input], outputs=[chat_ui.textbox])
 
@@ -222,6 +228,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
 
     def do_clear():
         clear_history()
+        # Direct structural wipe instructions for clearing historical cache array maps safely
         return None
 
     clear_memory_btn.click(do_clear, None, None)
