@@ -159,12 +159,61 @@ def respond(message, history, system_prompt, temperature, max_tokens, file_conte
     except Exception as e:
         yield f"Error: {str(e)}"
 
-# --- UI DESIGN (v11.1 COMPATIBLE STABLE INFRASTRUCTURE) ---
+# --- UI DESIGN (v12.0 NESTED COMPONENT INPUT BAR) ---
 
 custom_css = """
 footer {visibility: hidden}
 .gradio-container {background-color: #0b0f19;}
-.inline-row > div {align-self: center !important;}
+
+/* Merges the components into a single unbroken bar */
+.unified-input-bar {
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    background-color: #1a202c !important;
+    border: 1px solid #2e3748 !important;
+    border-radius: 30px !important;
+    padding: 4px 12px !important;
+}
+
+/* Strip inner borders and backgrounds to merge seamlessly */
+.unified-input-bar > div, 
+.unified-input-bar .form,
+.unified-input-bar textarea {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+
+/* Adjust the styling of the file input component */
+.unified-input-bar .upload-container {
+    padding: 0 !important;
+    margin: 0 !important;
+    min-height: unset !important;
+}
+
+/* Style the custom action triggers */
+.thunder-btn {
+    background: #00cccc !important;
+    color: #0b0f19 !important;
+    border-radius: 50% !important;
+    font-size: 18px !important;
+    min-width: 42px !important;
+    max-width: 42px !important;
+    height: 42px !important;
+    padding: 0 !important;
+    cursor: pointer;
+    box-shadow: 0 0 10px rgba(0, 204, 204, 0.4);
+}
+.thunder-btn:hover {
+    background: #00ffff !important;
+}
+
+/* Quick utility to balance the toggles underneath */
+.utility-row {
+    margin-top: 8px !important;
+    padding: 0 10px !important;
+}
 .settings-box {
     margin-top: 10px;
     padding: 15px;
@@ -175,21 +224,30 @@ footer {visibility: hidden}
 """
 
 with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), css=custom_css) as demo:
-    gr.Markdown("# ⚡ THUNDER WORKSPACE // Core v11.1")
+    gr.Markdown("# ⚡ THUNDER WORKSPACE // Core v12.0")
 
     chatbot = gr.Chatbot(value=load_history(), height=460)
 
-    # UNIFIED SINGLE MULTI-FEATURE INTERACTIVE ROW
-    with gr.Row(elem_classes=["inline-row"]):
-        msg = gr.Textbox(placeholder="Type message...", show_label=False, scale=5, container=False)
-        send_btn = gr.Button("Send", scale=1, min_width=60)
-        audio_input = gr.Audio(sources=["microphone"], type="filepath", show_label=False, scale=2, container=False)
-        file_input = gr.File(show_label=False, scale=2, file_count="single", container=False)
-        search_toggle = gr.Checkbox(label="🔍 Search", value=False, scale=1)
-        settings_toggle = gr.Checkbox(label="⚙️ Settings", value=False, scale=1)
-        clear_btn = gr.Button("🗑️ Clear", variant="stop", scale=1, min_width=60)
+    # UNIFIED CONTAINER BAR
+    with gr.Group(elem_classes=["unified-input-bar"]):
+        with gr.Row():
+            # LEFT SIDE: Integrated File Attachment Component
+            file_input = gr.File(show_label=False, scale=1, file_count="single", container=False, min_width=50)
+            
+            # CENTER: Clean text window area
+            msg = gr.Textbox(placeholder="Type message...", show_label=False, scale=7, container=False)
+            
+            # RIGHT SIDE: Action Triggers
+            audio_input = gr.Audio(sources=["microphone"], type="filepath", show_label=False, scale=1, container=False, min_width=45)
+            send_btn = gr.Button("⚡", scale=1, elem_classes=["thunder-btn"])
 
-    # Clean Group Layout wrapper container mapping out configuration panel explicitly
+    # UTILITY CONTROLS LAYER (Positioned neatly right beneath the input bar)
+    with gr.Row(elem_classes=["utility-row"]):
+        search_toggle = gr.Checkbox(label="🔍 Search Web", value=False, scale=1)
+        settings_toggle = gr.Checkbox(label="⚙️ Engine Settings", value=False, scale=1)
+        clear_btn = gr.Button("🗑️ Clear Memory", variant="stop", scale=1, size="sm")
+
+    # Engine configurations wrapper block panel
     with gr.Group(visible=False, elem_classes=["settings-box"]) as settings_panel:
         with gr.Row():
             system_prompt = gr.Textbox(value=DEFAULT_SYSTEM_PROMPT, label="System Directives / Brain Prompt", lines=2, scale=6)
