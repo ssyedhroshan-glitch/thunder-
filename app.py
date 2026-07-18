@@ -228,4 +228,3 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
 
 port_number = int(os.environ.get("PORT", 10000))
 demo.queue(concurrency_count=3).launch(server_name="0.0.0.0", server_port=port_number)
-    
