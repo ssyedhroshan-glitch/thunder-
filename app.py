@@ -159,16 +159,23 @@ def respond(message, history, system_prompt, temperature, max_tokens, file_conte
     except Exception as e:
         yield f"Error: {str(e)}"
 
-# --- UI DESIGN (v11.0 INTERACTIVE ROW PLATFORM) ---
+# --- UI DESIGN (v11.1 COMPATIBLE STABLE INFRASTRUCTURE) ---
 
 custom_css = """
 footer {visibility: hidden}
 .gradio-container {background-color: #0b0f19;}
 .inline-row > div {align-self: center !important;}
+.settings-box {
+    margin-top: 10px;
+    padding: 15px;
+    border: 1px solid #2e3748;
+    background-color: #1a202c !important;
+    border-radius: 8px;
+}
 """
 
 with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), css=custom_css) as demo:
-    gr.Markdown("# ⚡ THUNDER WORKSPACE // Core v11.0")
+    gr.Markdown("# ⚡ THUNDER WORKSPACE // Core v11.1")
 
     chatbot = gr.Chatbot(value=load_history(), height=460)
 
@@ -179,13 +186,11 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
         audio_input = gr.Audio(sources=["microphone"], type="filepath", show_label=False, scale=2, container=False)
         file_input = gr.File(show_label=False, scale=2, file_count="single", container=False)
         search_toggle = gr.Checkbox(label="🔍 Search", value=False, scale=1)
-        
-        # New Feature Node: Collapsible settings inside the single line
         settings_toggle = gr.Checkbox(label="⚙️ Settings", value=False, scale=1)
         clear_btn = gr.Button("🗑️ Clear", variant="stop", scale=1, min_width=60)
 
-    # Dynamic settings workspace container controlled directly by the row button
-    with gr.Box(visible=False) as settings_panel:
+    # Clean Group Layout wrapper container mapping out configuration panel explicitly
+    with gr.Group(visible=False, elem_classes=["settings-box"]) as settings_panel:
         with gr.Row():
             system_prompt = gr.Textbox(value=DEFAULT_SYSTEM_PROMPT, label="System Directives / Brain Prompt", lines=2, scale=6)
             temperature = gr.Slider(minimum=0.1, maximum=1.5, value=0.75, step=0.05, label="Temperature Node", scale=3)
@@ -194,11 +199,8 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
     reply_audio = gr.Audio(label="🔊 Vocal Feedback Node", autoplay=True, visible=False)
     file_context = gr.State("")
 
-    # Bind toggle visibility to configuration layout
-    def toggle_panel(visible):
-        return gr.update(visible=visible)
-    
-    settings_toggle.change(toggle_panel, inputs=[settings_toggle], outputs=[settings_panel])
+    # Toggle engine settings visibility smoothly
+    settings_toggle.change(lambda visible: gr.update(visible=visible), inputs=[settings_toggle], outputs=[settings_panel])
 
     # Actions binding
     file_input.change(read_file, inputs=[file_input], outputs=[file_context])
