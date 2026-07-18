@@ -159,7 +159,7 @@ def respond(message, history, system_prompt, temperature, max_tokens, file_conte
     except Exception as e:
         yield f"Error: {str(e)}"
 
-# --- UI DESIGN (v9.2 ACCORDION SETTINGS LAYOUT) ---
+# --- UI DESIGN (v9.3 COMPATIBLE UNIFIED ACCORDION SIDEBAR CONTROL) ---
 
 custom_css = """
 footer {visibility: hidden}
@@ -167,16 +167,16 @@ footer {visibility: hidden}
 """
 
 with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), css=custom_css) as demo:
-    gr.Markdown("# ⚡ THUNDER WORKSPACE // Core v9.2")
-    gr.Markdown("Unified Interaction Hub with collapsible system environment controls.")
+    gr.Markdown("# ⚡ THUNDER WORKSPACE // Core v9.3")
+    gr.Markdown("Unified Inline Row System Environment Core Node Setup.")
 
     chatbot = gr.Chatbot(value=load_history(), height=440)
 
-    # Main Interaction Row
+    # Main Interaction Row (Standardized Audio inputs format)
     with gr.Row():
         msg = gr.Textbox(placeholder="Type message or stream voice data input...", scale=7)
         send_btn = gr.Button("Send", scale=1)
-        audio_input = gr.Audio(source="microphone", type="filepath", scale=3, label="Mic Array")
+        audio_input = gr.Audio(sources=["microphone"], type="filepath", scale=3, label="Mic Array")
 
     # Expandable Settings Drawer Configuration Block
     with gr.Accordion("⚙️ Core Configurations & Engine Settings", open=False):
