@@ -143,41 +143,29 @@ def stream_reply(messages, temperature, max_tokens):
         text += part
         yield text
 
-# --- CORE INTERFACE STYLING (v12.5 MATRIX BUILD) ---
+# --- CORE INTERFACE STYLING (V12.5 MATRIX FIX) ---
 custom_css = """
 footer {visibility: hidden;}
 .gradio-container {background-color: #0b0f19;}
 
-/* Merges structural components horizontally into a single layout pill */
+/* Combines inner nodes into a flat inline layout pill matrix */
 .unified-bar-container {
-    display: flex !important;
-    flex-direction: row !important;
-    align-items: center !important;
     background-color: #1a202c !important;
     border: 1px solid #2e3748 !important;
-    border-radius: 28px !important;
-    padding: 4px 14px !important;
+    border-radius: 32px !important;
+    padding: 6px 14px !important;
 }
 
-/* Eliminate default inner padding blocks from individual elements */
+/* Eliminate conflicting margins and wrapper layout configurations */
 .unified-bar-container > div, 
-.unified-bar-container .form,
+.unified-bar-container .form, 
 .unified-bar-container textarea {
     background: transparent !important;
     border: none !important;
     box-shadow: none !important;
 }
 
-/* Adjust layout structure for the inside row */
-.unified-bar-container .row-container {
-    display: flex !important;
-    flex-direction: row !important;
-    align-items: center !important;
-    width: 100% !important;
-    gap: 8px !important;
-}
-
-/* Tightly packs the left-aligned file uploader element */
+/* Hard reset on standard file container layout profiles */
 .unified-bar-container .upload-container {
     padding: 0 !important;
     margin: 0 !important;
@@ -187,15 +175,13 @@ footer {visibility: hidden;}
     display: none !important;
 }
 
-/* Production-grade right-pinned action button */
+/* Circular submit button node layout */
 .thunder-action-btn {
     background: #00cccc !important;
     color: #0b0f19 !important;
     border-radius: 50% !important;
     font-size: 16px !important;
-    min-width: 38px !important;
-    max-width: 38px !important;
-    height: 38px !important;
+    height: 42px !important;
     padding: 0 !important;
     cursor: pointer !important;
     box-shadow: 0 0 8px rgba(0, 204, 204, 0.4);
@@ -223,31 +209,31 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
     chatbot = gr.Chatbot(type="messages", height=440)
     chat_state = gr.State([])
 
-    # UNIFIED NESTED LAYOUT PILL
+    # FIXED LINEAR STRUCTURAL MATRIX
     with gr.Group(elem_classes=["unified-bar-container"]):
-        with gr.Row(elem_classes=["row-container"]):
-            # LEFT SIDE: Integrated File Attachment Button
-            file_input = gr.File(show_label=False, scale=1, file_count="single", container=False, min_width=40)
+        with gr.Row():
+            # LEFT SIDE: Integrated Quick Attachment File Node
+            file_input = gr.File(show_label=False, file_count="single", container=False, min_width=45)
             
-            # CENTER: Central Text Entry Window
-            msg = gr.Textbox(placeholder="Type message or speak...", show_label=False, scale=7, container=False)
+            # CENTER: Primary Text Messaging Window
+            msg = gr.Textbox(placeholder="Type message or speak...", show_label=False, container=False)
             
-            # RIGHT SIDE: Voice Microphone & Lightning Action Button
-            audio_input = gr.Audio(sources=["microphone"], type="filepath", show_label=False, scale=1, container=False, min_width=40)
-            send_btn = gr.Button("⚡", scale=1, elem_classes=["thunder-action-btn"])
+            # RIGHT SIDE: Microphone Control Panel & Lightning Execution Node
+            audio_input = gr.Audio(sources=["microphone"], type="filepath", show_label=False, container=False, min_width=45)
+            send_btn = gr.Button("⚡", elem_classes=["thunder-action-btn"], min_width=42)
 
-    # OVERLAY TOGGLES LAYER
+    # LOWER UTILITIES LAYER
     with gr.Row(elem_classes=["utility-row"]):
-        search_toggle = gr.Checkbox(label="🔍 Search web on prompt", value=False, scale=2)
-        settings_toggle = gr.Checkbox(label="⚙️ Engine Settings", value=False, scale=2)
-        clear_btn = gr.Button("🆕 New chat", variant="stop", scale=1, size="sm")
+        search_toggle = gr.Checkbox(label="🔍 Search web on prompt", value=False)
+        settings_toggle = gr.Checkbox(label="⚙️ Engine Settings", value=False)
+        clear_btn = gr.Button("🆕 New chat", variant="stop", size="sm")
 
-    # EXPANDABLE CONFIGURATION ENGINE DRAWER
+    # PREFERENCE SETTING PANEL DRAWER
     with gr.Group(visible=False, elem_classes=["settings-box"]) as settings_panel:
         with gr.Row():
-            system_prompt = gr.Textbox(value=DEFAULT_SYSTEM_PROMPT, label="System prompt", lines=2, scale=6)
-            temperature = gr.Slider(0.1, 1.5, value=0.75, step=0.05, label="Temperature", scale=3)
-            max_tokens = gr.Slider(256, 4096, value=1024, step=128, label="Max tokens", scale=3)
+            system_prompt = gr.Textbox(value=DEFAULT_SYSTEM_PROMPT, label="System prompt", lines=2)
+            temperature = gr.Slider(0.1, 1.5, value=0.75, step=0.05, label="Temperature")
+            max_tokens = gr.Slider(256, 4096, value=1024, step=128, label="Max tokens")
 
     reply_audio = gr.Audio(label="🔊 Vocal Feedback", autoplay=True, visible=False)
     file_context = gr.State("")
@@ -259,7 +245,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
 
     demo.load(start_session, None, [session_id, chatbot, chat_state])
 
-    # Dynamic settings drawer toggle link
+    # Connect settings panel visualization change toggle
     settings_toggle.change(lambda visible: gr.update(visible=visible), inputs=[settings_toggle], outputs=[settings_panel])
 
     def on_audio(audio_path):
