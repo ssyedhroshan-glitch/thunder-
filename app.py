@@ -159,43 +159,46 @@ def respond(message, history, system_prompt, temperature, max_tokens, file_conte
     except Exception as e:
         yield f"Error: {str(e)}"
 
-# --- UI DESIGN (v9.4 PROPORTIONAL INLINE WORKSPACE) ---
+# --- UI DESIGN (v11.0 INTERACTIVE ROW PLATFORM) ---
 
 custom_css = """
 footer {visibility: hidden}
 .gradio-container {background-color: #0b0f19;}
+.inline-row > div {align-self: center !important;}
 """
 
 with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), css=custom_css) as demo:
-    gr.Markdown("# ⚡ THUNDER WORKSPACE // Core v9.4")
-    gr.Markdown("Streamlined layout providing side-by-side action parameters.")
+    gr.Markdown("# ⚡ THUNDER WORKSPACE // Core v11.0")
 
-    chatbot = gr.Chatbot(value=load_history(), height=440)
+    chatbot = gr.Chatbot(value=load_history(), height=460)
 
-    # Line 1: Main Text input & Send Array
-    with gr.Row():
-        msg = gr.Textbox(placeholder="Type message or stream voice data input...", scale=8)
-        send_btn = gr.Button("Send", scale=2)
-
-    # Line 2: Balanced Core Features Row
-    with gr.Row():
-        audio_input = gr.Audio(sources=["microphone"], type="filepath", label="Mic Input", scale=3)
-        file_input = gr.File(label="📎 Attachment (.pdf, .txt, .csv, .md, .json)", scale=4)
+    # UNIFIED SINGLE MULTI-FEATURE INTERACTIVE ROW
+    with gr.Row(elem_classes=["inline-row"]):
+        msg = gr.Textbox(placeholder="Type message...", show_label=False, scale=5, container=False)
+        send_btn = gr.Button("Send", scale=1, min_width=60)
+        audio_input = gr.Audio(sources=["microphone"], type="filepath", show_label=False, scale=2, container=False)
+        file_input = gr.File(show_label=False, scale=2, file_count="single", container=False)
+        search_toggle = gr.Checkbox(label="🔍 Search", value=False, scale=1)
         
-        # Stack check and clear button to match layout heights
-        with gr.Column(scale=3, min_width=150):
-            search_toggle = gr.Checkbox(label="🔍 Search web on prompt", value=False)
-            clear_btn = gr.Button("🗑️ Clear memory", variant="stop")
+        # New Feature Node: Collapsible settings inside the single line
+        settings_toggle = gr.Checkbox(label="⚙️ Settings", value=False, scale=1)
+        clear_btn = gr.Button("🗑️ Clear", variant="stop", scale=1, min_width=60)
 
-    # Expandable Settings Drawer Configuration Block
-    with gr.Accordion("⚙️ Core Configurations & Engine Settings", open=False):
+    # Dynamic settings workspace container controlled directly by the row button
+    with gr.Box(visible=False) as settings_panel:
         with gr.Row():
             system_prompt = gr.Textbox(value=DEFAULT_SYSTEM_PROMPT, label="System Directives / Brain Prompt", lines=2, scale=6)
             temperature = gr.Slider(minimum=0.1, maximum=1.5, value=0.75, step=0.05, label="Temperature Node", scale=3)
             max_tokens = gr.Slider(minimum=256, maximum=4096, value=1024, step=128, label="Max Generated Tokens", scale=3)
 
-    reply_audio = gr.Audio(label="🔊 Vocal Feedback Node", autoplay=True)
+    reply_audio = gr.Audio(label="🔊 Vocal Feedback Node", autoplay=True, visible=False)
     file_context = gr.State("")
+
+    # Bind toggle visibility to configuration layout
+    def toggle_panel(visible):
+        return gr.update(visible=visible)
+    
+    settings_toggle.change(toggle_panel, inputs=[settings_toggle], outputs=[settings_panel])
 
     # Actions binding
     file_input.change(read_file, inputs=[file_input], outputs=[file_context])
