@@ -1,18 +1,16 @@
 import os
+import uuid
 import tempfile
 import sqlite3
 import gradio as gr
 from huggingface_hub import InferenceClient
 
-# Securely retrieve your Hugging Face token
 hf_token = os.environ.get("HF_TOKEN")
 
-# Initialize the Hugging Face clients
-client = InferenceClient("Qwen/Qwen2.5-7B-Instruct", token=hf_token)
-whisper_client = InferenceClient("openai/whisper-large-v3", token=hf_token)
-tts_client = InferenceClient("microsoft/speecht5_tts", token=hf_token)
+client = InferenceClient(model="Qwen/Qwen2.5-7B-Instruct", token=hf_token)
+whisper_client = InferenceClient(model="openai/whisper-large-v3", token=hf_token)
+tts_client = InferenceClient(model="microsoft/speecht5_tts", token=hf_token)
 
-# --- SESSION MEMORY (SQLite) ---
 DB_PATH = "thunder_memory.db"
 
 def init_db():
@@ -20,75 +18,64 @@ def init_db():
     conn.execute("""
         CREATE TABLE IF NOT EXISTS history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            role TEXT,
-            content TEXT
+            session_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL
         )
     """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_session ON history(session_id)")
     conn.commit()
     conn.close()
 
-def load_history():
+def save_message(session_id, role, content):
     conn = sqlite3.connect(DB_PATH)
-    rows = conn.execute("SELECT role, content FROM history ORDER BY id").fetchall()
-    conn.close()
-    
-    chat_list = []
-    current_pair = [None, None]
-    for role, content in rows:
-        if role == "user":
-            if current_pair[0] is not None:
-                chat_list.append(current_pair)
-                current_pair = [None, None]
-            current_pair[0] = content
-        elif role == "assistant":
-            current_pair[1] = content
-            chat_list.append(current_pair)
-            current_pair = [None, None]
-    if current_pair[0] is not None:
-        chat_list.append(current_pair)
-    return chat_list
-
-def save_message(role, content):
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("INSERT INTO history (role, content) VALUES (?, ?)", (role, content))
+    conn.execute(
+        "INSERT INTO history (session_id, role, content) VALUES (?, ?, ?)",
+        (session_id, role, content)
+    )
     conn.commit()
     conn.close()
 
-def clear_history():
+def clear_history(session_id):
     conn = sqlite3.connect(DB_PATH)
-    conn.execute("DELETE FROM history")
+    conn.execute("DELETE FROM history WHERE session_id = ?", (session_id,))
     conn.commit()
     conn.close()
+
+def load_history(session_id):
+    conn = sqlite3.connect(DB_PATH)
+    rows = conn.execute(
+        "SELECT role, content FROM history WHERE session_id = ? ORDER BY id",
+        (session_id,)
+    ).fetchall()
+    conn.close()
+    return [{"role": role, "content": content} for role, content in rows if role in ("user", "assistant")]
 
 init_db()
 
 DEFAULT_SYSTEM_PROMPT = (
     "You are Thunder, an elite, tech-savvy AI collaborator with a sharp mind and a touch of dry wit. "
     "You talk to the user as a brilliant, supportive peer and co-founder. "
-    "Provide highly insightful, direct, and scannable answers using bold headers and clean bullet points. "
-    "Break down complex concepts with high technical accuracy but zero dry academic jargon. "
-    "Keep your tone authentic, grounded, and engaging. Never use robotic disclaimers. "
-    "Only bring up a specific topic if the user raises it."
+    "Provide highly insightful, direct, and scannable answers using short headings and clean bullet points. "
+    "Break down complex concepts clearly. "
+    "Keep your tone authentic, grounded, and engaging."
 )
 
-# --- HELPER FUNCTIONS ---
-
 def transcribe(audio_path):
-    if audio_path is None:
+    if not audio_path:
         return ""
     try:
         result = whisper_client.automatic_speech_recognition(audio_path)
         return result.text if hasattr(result, "text") else str(result)
     except Exception as e:
-        return f"[Transcription Error: {str(e)}]"
+        return f"[Transcription Error: {e}]"
 
 def speak(text):
     if not text:
         return None
     try:
-        clean_text = text.replace("*", "").replace("#", "").replace("- ", "").replace("`", "")
-        if len(clean_text) > 250:  
-            clean_text = clean_text[:250] + "..."
+        clean_text = text.replace("*", "").replace("#", "").replace("`", "")
+        clean_text = clean_text[:250]
         audio_bytes = tts_client.text_to_speech(clean_text)
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
         tmp.write(audio_bytes)
@@ -97,28 +84,26 @@ def speak(text):
     except Exception:
         return None
 
-def read_file(file_path):
-    if file_path is None:
+def read_file(file_obj):
+    if file_obj is None:
         return ""
     try:
-        file_name = file_path.name if hasattr(file_path, "name") else file_path
-        ext = os.path.splitext(file_name)[1].lower()
+        file_path = file_obj.name if hasattr(file_obj, "name") else file_obj
+        ext = os.path.splitext(file_path)[1].lower()
+
         if ext == ".pdf":
             from pypdf import PdfReader
-            reader = PdfReader(file_name)
+            reader = PdfReader(file_path)
             text = "\n".join(page.extract_text() or "" for page in reader.pages)
         elif ext in (".txt", ".md", ".csv", ".py", ".json"):
-            with open(file_name, "r", errors="ignore") as f:
+            with open(file_path, "r", errors="ignore") as f:
                 text = f.read()
         else:
             return f"[Unsupported file type: {ext}]"
 
-        max_chars = 12000
-        if len(text) > max_chars:
-            text = text[:max_chars] + "\n...[truncated]"
-        return text
+        return text[:12000]
     except Exception as e:
-        return f"[File Read Error: {str(e)}]"
+        return f"[File Read Error: {e}]"
 
 def web_search(query, max_results=3):
     try:
@@ -127,184 +112,212 @@ def web_search(query, max_results=3):
             results = list(ddgs.text(query, max_results=max_results))
         if not results:
             return ""
-        return "\n\n".join(f"- {r.get('title','')}: {r.get('body','')} ({r.get('href','')})" for r in results)
+        lines = []
+        for r in results[:max_results]:
+            title = r.get("title", "")
+            body = r.get("body", "")
+            href = r.get("href", "")
+            lines.append(f"- {title}: {body} ({href})")
+        return "\n".join(lines)
     except Exception as e:
-        return f"[Search Error: {str(e)}]"
+        return f"[Search Error: {e}]"
 
-def respond(message, history, system_prompt, temperature, max_tokens, file_context, search_enabled):
-    try:
-        full_system_prompt = system_prompt
-        if search_enabled:
-            results = web_search(message)
-            if results and not results.startswith("[Search Error"):
-                full_system_prompt += "\n\nLive web search results:\n\n" + results
+def build_messages(history, system_prompt, file_context, search_context):
+    messages = [{"role": "system", "content": system_prompt}]
+    if search_context:
+        messages.append({"role": "system", "content": "Live web search results:\n\n" + search_context})
+    if file_context:
+        messages.append({"role": "system", "content": "Uploaded file context:\n\n" + file_context})
+    messages.extend(history)
+    return messages
 
-        if file_context:
-            full_system_prompt += "\n\nUploaded workspace file context:\n\n" + file_context
+def stream_reply(messages, temperature, max_tokens):
+    text = ""
+    for chunk in client.chat.completions.create(
+        messages=messages,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        stream=True,
+    ):
+        part = chunk.choices[0].delta.content or ""
+        text += part
+        yield text
 
-        messages = [{"role": "system", "content": full_system_prompt}]
-        for turn in history:
-            if isinstance(turn, (list, tuple)) and len(turn) >= 2:
-                if turn[0]: messages.append({"role": "user", "content": turn[0]})
-                if turn[1]: messages.append({"role": "assistant", "content": turn[1]})
-
-        messages.append({"role": "user", "content": message})
-
-        response = ""
-        for token in client.chat_completion(messages, max_tokens=max_tokens, temperature=temperature, stream=True):
-            token_text = token.choices[0].delta.content
-            if token_text:
-                response += token_text
-                yield response
-    except Exception as e:
-        yield f"Error: {str(e)}"
-
-# --- UI DESIGN (v12.0 NESTED COMPONENT INPUT BAR) ---
-
+# --- CORE INTERFACE STYLING (v12.2 NESTED SPECIFICATION) ---
 custom_css = """
-footer {visibility: hidden}
+footer {visibility: hidden;}
 .gradio-container {background-color: #0b0f19;}
 
-/* Merges the components into a single unbroken bar */
-.unified-input-bar {
+/* Merges structural components horizontally into a single layout pill */
+.unified-bar-container {
     display: flex !important;
     flex-direction: row !important;
     align-items: center !important;
     background-color: #1a202c !important;
     border: 1px solid #2e3748 !important;
-    border-radius: 30px !important;
-    padding: 4px 12px !important;
+    border-radius: 28px !important;
+    padding: 2px 10px !important;
 }
 
-/* Strip inner borders and backgrounds to merge seamlessly */
-.unified-input-bar > div, 
-.unified-input-bar .form,
-.unified-input-bar textarea {
+/* Eliminate default inner padding blocks from individual elements */
+.unified-bar-container > div, 
+.unified-bar-container .form,
+.unified-bar-container textarea {
     background: transparent !important;
     border: none !important;
     box-shadow: none !important;
 }
 
-/* Adjust the styling of the file input component */
-.unified-input-bar .upload-container {
+/* Tightly packs the left-aligned file uploader element */
+.unified-bar-container .upload-container {
     padding: 0 !important;
     margin: 0 !important;
     min-height: unset !important;
 }
+.unified-bar-container .file-preview {
+    display: none !important;
+}
 
-/* Style the custom action triggers */
-.thunder-btn {
+/* Production-grade right-pinned action button */
+.thunder-action-btn {
     background: #00cccc !important;
     color: #0b0f19 !important;
     border-radius: 50% !important;
-    font-size: 18px !important;
-    min-width: 42px !important;
-    max-width: 42px !important;
-    height: 42px !important;
+    font-size: 16px !important;
+    min-width: 38px !important;
+    max-width: 38px !important;
+    height: 38px !important;
     padding: 0 !important;
-    cursor: pointer;
-    box-shadow: 0 0 10px rgba(0, 204, 204, 0.4);
+    cursor: pointer !important;
+    box-shadow: 0 0 8px rgba(0, 204, 204, 0.4);
 }
-.thunder-btn:hover {
+.thunder-action-btn:hover {
     background: #00ffff !important;
 }
 
-/* Quick utility to balance the toggles underneath */
 .utility-row {
-    margin-top: 8px !important;
-    padding: 0 10px !important;
+    margin-top: 6px !important;
 }
 .settings-box {
-    margin-top: 10px;
-    padding: 15px;
+    margin-top: 8px;
+    padding: 12px;
     border: 1px solid #2e3748;
     background-color: #1a202c !important;
-    border-radius: 8px;
+    border-radius: 6px;
 }
 """
 
 with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), css=custom_css) as demo:
-    gr.Markdown("# ⚡ THUNDER WORKSPACE // Core v12.0")
+    gr.Markdown("# ⚡ THUNDER WORKSPACE // Core v12.2")
 
-    chatbot = gr.Chatbot(value=load_history(), height=460)
+    session_id = gr.State(None)
+    chatbot = gr.Chatbot(type="messages", height=440)
+    chat_state = gr.State([])
 
-    # UNIFIED CONTAINER BAR
-    with gr.Group(elem_classes=["unified-input-bar"]):
+    # UNIFIED NESTED LAYOUT PILL
+    with gr.Group(elem_classes=["unified-bar-container"]):
         with gr.Row():
-            # LEFT SIDE: Integrated File Attachment Component
-            file_input = gr.File(show_label=False, scale=1, file_count="single", container=False, min_width=50)
+            # LEFT SIDE: Integrated File Attachment Button
+            file_input = gr.File(show_label=False, scale=1, file_count="single", container=False, min_width=45)
             
-            # CENTER: Clean text window area
-            msg = gr.Textbox(placeholder="Type message...", show_label=False, scale=7, container=False)
+            # CENTER: Central Text Entry Window
+            msg = gr.Textbox(placeholder="Type message or speak...", show_label=False, scale=8, container=False)
             
-            # RIGHT SIDE: Action Triggers
+            # RIGHT SIDE: Voice Microphone & Lightning Action Button
             audio_input = gr.Audio(sources=["microphone"], type="filepath", show_label=False, scale=1, container=False, min_width=45)
-            send_btn = gr.Button("⚡", scale=1, elem_classes=["thunder-btn"])
+            send_btn = gr.Button("⚡", scale=1, elem_classes=["thunder-action-btn"])
 
-    # UTILITY CONTROLS LAYER (Positioned neatly right beneath the input bar)
+    # OVERLAY TOGGLES LAYER
     with gr.Row(elem_classes=["utility-row"]):
-        search_toggle = gr.Checkbox(label="🔍 Search Web", value=False, scale=1)
-        settings_toggle = gr.Checkbox(label="⚙️ Engine Settings", value=False, scale=1)
-        clear_btn = gr.Button("🗑️ Clear Memory", variant="stop", scale=1, size="sm")
+        search_toggle = gr.Checkbox(label="🔍 Search web on prompt", value=False, scale=2)
+        settings_toggle = gr.Checkbox(label="⚙️ Engine Settings", value=False, scale=2)
+        clear_btn = gr.Button("🆕 New chat", variant="stop", scale=1, size="sm")
 
-    # Engine configurations wrapper block panel
+    # EXPANDABLE CONFIGURATION ENGINE DRAWER
     with gr.Group(visible=False, elem_classes=["settings-box"]) as settings_panel:
         with gr.Row():
-            system_prompt = gr.Textbox(value=DEFAULT_SYSTEM_PROMPT, label="System Directives / Brain Prompt", lines=2, scale=6)
-            temperature = gr.Slider(minimum=0.1, maximum=1.5, value=0.75, step=0.05, label="Temperature Node", scale=3)
-            max_tokens = gr.Slider(minimum=256, maximum=4096, value=1024, step=128, label="Max Generated Tokens", scale=3)
+            system_prompt = gr.Textbox(value=DEFAULT_SYSTEM_PROMPT, label="System prompt", lines=2, scale=6)
+            temperature = gr.Slider(0.1, 1.5, value=0.75, step=0.05, label="Temperature", scale=3)
+            max_tokens = gr.Slider(256, 4096, value=1024, step=128, label="Max tokens", scale=3)
 
-    reply_audio = gr.Audio(label="🔊 Vocal Feedback Node", autoplay=True, visible=False)
+    reply_audio = gr.Audio(label="🔊 Vocal Feedback", autoplay=True, visible=False)
     file_context = gr.State("")
 
-    # Toggle engine settings visibility smoothly
+    def start_session():
+        sid = str(uuid.uuid4())
+        return sid, load_history(sid), []
+
+    demo.load(start_session, None, [session_id, chatbot, chat_state])
+
+    # Dynamic settings toggle mapping switch
     settings_toggle.change(lambda visible: gr.update(visible=visible), inputs=[settings_toggle], outputs=[settings_panel])
 
-    # Actions binding
-    file_input.change(read_file, inputs=[file_input], outputs=[file_context])
-    audio_input.change(transcribe, inputs=[audio_input], outputs=[msg])
+    def on_audio(audio_path):
+        return transcribe(audio_path)
 
-    def user_send(message, history):
+    def on_file(file_obj):
+        return read_file(file_obj)
+
+    def user_send(message, history, sid):
         message = (message or "").strip()
         if not message:
-            return "", history
-        save_message("user", message)
-        return "", history + [[message, ""]]
+            return "", history, history
+        history = history + [{"role": "user", "content": message}]
+        save_message(sid, "user", message)
+        return "", history, history
 
-    def bot_reply(history, sys_prompt, temp, tokens, f_context, search_on):
+    def bot_reply(history, sys_prompt, temp, tokens, f_context, search_on, sid):
         if not history:
-            yield history
-            return
-        message = history[-1][0]
-        api_history = history[:-1]
-        
-        for chunk in respond(message, api_history, sys_prompt, temp, tokens, f_context, search_on):
-            history[-1][1] = chunk
-            yield history
-        save_message("assistant", history[-1][1])
+            return history, history
+
+        last_user = history[-1]["content"]
+        search_context = web_search(last_user) if search_on else ""
+        messages = build_messages(history[:-1], sys_prompt, f_context, search_context)
+
+        history = history + [{"role": "assistant", "content": ""}]
+        final_text = ""
+
+        try:
+            for partial in stream_reply(messages, temp, tokens):
+                final_text = partial
+                history[-1]["content"] = final_text
+                yield history, history
+            save_message(sid, "assistant", final_text)
+        except Exception as e:
+            err = f"Error: {e}"
+            history[-1]["content"] = err
+            save_message(sid, "assistant", err)
+            yield history, history
 
     def bot_speak(history):
-        if history and history[-1][1]:
-            return speak(history[-1][1])
+        if history and history[-1].get("content"):
+            return speak(history[-1]["content"])
         return None
 
-    def do_clear():
-        clear_history()
-        return []
+    def do_clear(sid):
+        clear_history(sid)
+        return [], []
 
-    msg.submit(user_send, [msg, chatbot], [msg, chatbot]).then(
-        bot_reply, [chatbot, system_prompt, temperature, max_tokens, file_context, search_toggle], chatbot
+    audio_input.change(on_audio, inputs=[audio_input], outputs=[msg])
+    file_input.change(on_file, inputs=[file_input], outputs=[file_context])
+
+    msg.submit(
+        user_send, [msg, chat_state, session_id], [msg, chatbot, chat_state]
     ).then(
-        bot_speak, chatbot, reply_audio
+        bot_reply, [chat_state, system_prompt, temperature, max_tokens, file_context, search_toggle, session_id], [chatbot, chat_state]
+    ).then(
+        bot_speak, [chat_state], [reply_audio]
     )
 
-    send_btn.click(user_send, [msg, chatbot], [msg, chatbot]).then(
-        bot_reply, [chatbot, system_prompt, temperature, max_tokens, file_context, search_toggle], chatbot
+    send_btn.click(
+        user_send, [msg, chat_state, session_id], [msg, chatbot, chat_state]
     ).then(
-        bot_speak, chatbot, reply_audio
+        bot_reply, [chat_state, system_prompt, temperature, max_tokens, file_context, search_toggle, session_id], [chatbot, chat_state]
+    ).then(
+        bot_speak, [chat_state], [reply_audio]
     )
 
-    clear_btn.click(do_clear, None, chatbot)
+    clear_btn.click(do_clear, [session_id], [chatbot, chat_state])
 
 port_number = int(os.environ.get("PORT", 10000))
 demo.queue(default_concurrency_limit=3).launch(server_name="0.0.0.0", server_port=port_number)
