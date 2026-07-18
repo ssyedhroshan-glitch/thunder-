@@ -27,16 +27,8 @@ def init_db():
     conn.commit()
     conn.close()
 
-def load_history_for_interface():
-    """Loads history into the explicit format gr.ChatInterface expects internally."""
-    conn = sqlite3.connect(DB_PATH)
-    rows = conn.execute("SELECT role, content FROM history ORDER BY id").fetchall()
-    conn.close()
-    return [{"role": r, "content": c} for r, c in rows]
-
 def save_message(role, content):
     conn = sqlite3.connect(DB_PATH)
-    conn.execute("INSERT TABLE IF NOT EXISTS history (role, content) VALUES (?, ?)", (role, content))
     conn.execute("INSERT INTO history (role, content) VALUES (?, ?)", (role, content))
     conn.commit()
     conn.close()
@@ -130,11 +122,10 @@ def web_search(query, max_results=3):
     except Exception as e:
         return f"[Search Error: {str(e)}]"
 
-# --- REWIRED HANDLER LOGIC FOR CHATINTERFACE ---
+# --- HANDLER LOGIC ---
 
 def chat_handler(message, history, system_prompt, temperature, max_tokens, file_context, search_enabled):
     try:
-        # Save user text to the database right away
         save_message("user", message)
         
         full_system_prompt = system_prompt
@@ -154,7 +145,6 @@ def chat_handler(message, history, system_prompt, temperature, max_tokens, file_
 
         messages = [{"role": "system", "content": full_system_prompt}]
         
-        # Format the native internal history dictionary safely for OpenAI/HF endpoints
         for turn in history:
             user_content = turn.get("user", {}).get("text", "") if isinstance(turn, dict) else turn[0]
             bot_content = turn.get("assistant", {}).get("text", "") if isinstance(turn, dict) else turn[1]
@@ -175,14 +165,13 @@ def chat_handler(message, history, system_prompt, temperature, max_tokens, file_
                 response += token_text
                 yield response
                 
-        # Persist full assistant generation once streaming is done
         if response:
             save_message("assistant", response)
 
     except Exception as e:
         yield f"Error: {str(e)}"
 
-# --- CUSTOM UI DESIGN WITH GR.BLOCKS ---
+# --- CUSTOM UI DESIGN ---
 
 custom_css = """
 footer {visibility: hidden}
@@ -190,10 +179,9 @@ footer {visibility: hidden}
 """
 
 with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), css=custom_css) as demo:
-    gr.Markdown("# ⚡ THUNDER WORKSPACE // Core v8.0")
-    gr.Markdown("Production Environment. Seamless text processing, file parsing, web scraping, and speech nodes running concurrently.")
+    gr.Markdown("# ⚡ THUNDER WORKSPACE // Core v8.1")
+    gr.Markdown("Production Environment. Text processing, file parsing, web scraping, and speech nodes active.")
 
-    # Shared State Variables
     system_prompt = gr.State(DEFAULT_SYSTEM_PROMPT)
     temperature = gr.State(0.75)
     max_tokens = gr.State(1024)
@@ -201,7 +189,6 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
 
     with gr.Row():
         with gr.Column(scale=9):
-            # Safe Native Interface handling 
             chat_ui = gr.ChatInterface(
                 fn=chat_handler,
                 additional_inputs=[system_prompt, temperature, max_tokens, file_context],
@@ -220,13 +207,9 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
             
             clear_memory_btn = gr.Button("🗑️ Clear Database Memory", variant="stop")
 
-    # Connect component functions safely
     file_input.change(read_file, inputs=[file_input], outputs=[file_context])
-    
-    # Send transcribed audio text into ChatInterface textbox input
     audio_input.change(transcribe, inputs=[audio_input], outputs=[chat_ui.textbox])
 
-    # Dynamic Audio Speech Synthesizer Function
     def trigger_speech():
         conn = sqlite3.connect(DB_PATH)
         last_bot_reply = conn.execute("SELECT content FROM history WHERE role='assistant' ORDER BY id DESC LIMIT 1").fetchone()
@@ -241,8 +224,8 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
         clear_history()
         return None
 
-    clear_memory_btn.click(do_clear, None, chat_ui.chatbot)
+    clear_memory_btn.click(do_clear, None, None)
 
-# Port setup tracking
 port_number = int(os.environ.get("PORT", 10000))
 demo.queue(concurrency_count=3).launch(server_name="0.0.0.0", server_port=port_number)
+    
