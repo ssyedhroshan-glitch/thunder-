@@ -28,7 +28,6 @@ def init_db():
     conn.close()
 
 def load_history():
-    """Loads historical context from database safely into list of lists."""
     conn = sqlite3.connect(DB_PATH)
     rows = conn.execute("SELECT role, content FROM history ORDER BY id").fetchall()
     conn.close()
@@ -63,7 +62,6 @@ def clear_history():
 
 init_db()
 
-# The Brain: System configuration
 DEFAULT_SYSTEM_PROMPT = (
     "You are Thunder, an elite, tech-savvy AI collaborator with a sharp mind and a touch of dry wit. "
     "You talk to the user as a brilliant, supportive peer and co-founder. "
@@ -161,7 +159,7 @@ def respond(message, history, system_prompt, temperature, max_tokens, file_conte
     except Exception as e:
         yield f"Error: {str(e)}"
 
-# --- UI DESIGN (ORIGINAL SCANNABLE LAYOUT) ---
+# --- UI DESIGN (v9.2 ACCORDION SETTINGS LAYOUT) ---
 
 custom_css = """
 footer {visibility: hidden}
@@ -169,29 +167,31 @@ footer {visibility: hidden}
 """
 
 with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), css=custom_css) as demo:
-    gr.Markdown("# ⚡ THUNDER WORKSPACE // Core v9.0")
-    gr.Markdown("Speak, type, drop custom data files, or switch live search indexes instantly.")
+    gr.Markdown("# ⚡ THUNDER WORKSPACE // Core v9.2")
+    gr.Markdown("Unified Interaction Hub with collapsible system environment controls.")
 
-    chatbot = gr.Chatbot(value=load_history(), height=480)
+    chatbot = gr.Chatbot(value=load_history(), height=440)
 
-    # Main Interaction Bar Row
+    # Main Interaction Row
     with gr.Row():
-        msg = gr.Textbox(placeholder="Type message or speak into the microphone node...", scale=7)
+        msg = gr.Textbox(placeholder="Type message or stream voice data input...", scale=7)
         send_btn = gr.Button("Send", scale=1)
-        audio_input = gr.Audio(sources=["microphone"], type="filepath", scale=3, label="Mic Array")
+        audio_input = gr.Audio(source="microphone", type="filepath", scale=3, label="Mic Array")
 
-    # Feature Extension Configuration Bar Row
+    # Expandable Settings Drawer Configuration Block
+    with gr.Accordion("⚙️ Core Configurations & Engine Settings", open=False):
+        with gr.Row():
+            system_prompt = gr.Textbox(value=DEFAULT_SYSTEM_PROMPT, label="System Directives / Brain Prompt", lines=2, scale=6)
+            temperature = gr.Slider(minimum=0.1, maximum=1.5, value=0.75, step=0.05, label="Temperature Node", scale=3)
+            max_tokens = gr.Slider(minimum=256, maximum=4096, value=1024, step=128, label="Max Generated Tokens", scale=3)
+
+    # Workspace Tool Row
     with gr.Row():
         file_input = gr.File(label="📎 Context attachment (.pdf, .txt, .csv, .md, .json)", scale=5)
         search_toggle = gr.Checkbox(label="🔍 Search web on prompt", scale=2, value=False)
         clear_btn = gr.Button("🗑️ Clear memory", scale=2)
 
     reply_audio = gr.Audio(label="🔊 Vocal Feedback Node", autoplay=True)
-
-    # Internal parameters state setup
-    system_prompt = gr.State(DEFAULT_SYSTEM_PROMPT)
-    temperature = gr.State(0.75)
-    max_tokens = gr.State(1024)
     file_context = gr.State("")
 
     # Actions binding
@@ -226,7 +226,6 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
         clear_history()
         return []
 
-    # Sequential event flows setup safely
     msg.submit(user_send, [msg, chatbot], [msg, chatbot]).then(
         bot_reply, [chatbot, system_prompt, temperature, max_tokens, file_context, search_toggle], chatbot
     ).then(
