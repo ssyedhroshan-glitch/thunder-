@@ -49,7 +49,22 @@ def load_history(session_id):
         (session_id,)
     ).fetchall()
     conn.close()
-    return [{"role": role, "content": content} for role, content in rows if role in ("user", "assistant")]
+    
+    # Map to legacy universal tuple structure format: [[user, bot], ...]
+    chat_tuples = []
+    temp_user = None
+    for role, content in rows:
+        if role == "user":
+            temp_user = content
+        elif role == "assistant":
+            if temp_user is not None:
+                chat_tuples.append([temp_user, content])
+                temp_user = None
+            else:
+                chat_tuples.append(["", content])
+    if temp_user is not None:
+        chat_tuples.append([temp_user, ""])
+    return chat_tuples
 
 init_db()
 
@@ -122,13 +137,18 @@ def web_search(query, max_results=3):
     except Exception as e:
         return f"[Search Error: {e}]"
 
-def build_messages(history, system_prompt, file_context, search_context):
+def build_messages(chat_history, system_prompt, file_context, search_context):
     messages = [{"role": "system", "content": system_prompt}]
     if search_context:
         messages.append({"role": "system", "content": "Live web search results:\n\n" + search_context})
     if file_context:
         messages.append({"role": "system", "content": "Uploaded file context:\n\n" + file_context})
-    messages.extend(history)
+    
+    for u, a in chat_history:
+        if u:
+            messages.append({"role": "user", "content": u})
+        if a:
+            messages.append({"role": "assistant", "content": a})
     return messages
 
 def stream_reply(messages, temperature, max_tokens):
@@ -155,13 +175,14 @@ footer {visibility: hidden;}
 """
 
 with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), css=custom_css) as demo:
-    gr.Markdown("# ⚡ THUNDER WORKSPACE // Core v17.0")
+    gr.Markdown("# ⚡ THUNDER WORKSPACE // Core v18.0")
 
     session_id = gr.State(None)
     chat_state = gr.State([])
     file_context = gr.State("")
     
-    chatbot = gr.Chatbot(type="messages", height=450)
+    # Universal fallback layout component syntax
+    chatbot = gr.Chatbot(height=450)
 
     # SECURE MESSAGE INPUT CONSOLE
     with gr.Row():
@@ -174,7 +195,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
         with gr.Column(scale=1, min_width=80):
             send_btn = gr.Button("⚡ Run", variant="primary")
 
-    # STABLE INTERFACE CONTAINERS (Using standard gr.Group to replace gr.Box)
+    # STABLE DECOUPLED ACCESSORIES PANEL
     with gr.Row():
         with gr.Column(scale=5):
             with gr.Group(elem_classes=["panel-card"]):
@@ -219,7 +240,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
         message = (message or "").strip()
         if not message:
             return "", history, history
-        history = history + [{"role": "user", "content": message}]
+        history = history + [[message, ""]]
         save_message(sid, "user", message)
         return "", history, history
 
@@ -227,28 +248,28 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
         if not history:
             return history, history
 
-        last_user = history[-1]["content"]
+        last_user = history[-1][0]
         search_context = web_search(last_user) if search_on else ""
+        # Build prompt messaging list using everything up to the active query turn
         messages = build_messages(history[:-1], sys_prompt, f_context, search_context)
+        messages.append({"role": "user", "content": last_user})
 
-        history = history + [{"role": "assistant", "content": ""}]
         final_text = ""
-
         try:
             for partial in stream_reply(messages, temp, tokens):
                 final_text = partial
-                history[-1]["content"] = final_text
+                history[-1][1] = final_text
                 yield history, history
             save_message(sid, "assistant", final_text)
         except Exception as e:
             err = f"Error: {e}"
-            history[-1]["content"] = err
+            history[-1][1] = err
             save_message(sid, "assistant", err)
             yield history, history
 
     def bot_speak(history):
-        if history and history[-1].get("content"):
-            return speak(history[-1]["content"])
+        if history and history[-1][1]:
+            return speak(history[-1][1])
         return None
 
     def do_clear(sid):
