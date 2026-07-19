@@ -5,6 +5,7 @@ import sqlite3
 import gradio as gr
 
 from google import genai
+from google.genai import types
 from anthropic import Anthropic
 
 # -------------------------
@@ -137,25 +138,42 @@ Uploaded file context:
 " + file_context
     return prompt
 
+def choose_model(message, history):
+    text = (message or "").lower().strip()
+    word_count = len(text.split())
+
+    if any(k in text for k in ["write", "rewrite", "polish", "improve", "edit", "essay", "email", "report"]):
+        return "Claude"
+    if any(k in text for k in ["summarize", "summary", "what is", "why", "how does", "explain"]):
+        return "Gemini"
+    if word_count <= 12:
+        return "Gemini"
+    if len(history) >= 6:
+        return "Claude"
+    if len(text) > 180:
+        return "Claude"
+    return "Gemini"
+
 def gemini_answer(message, history, system_prompt, temperature, max_tokens, file_context):
     if not gemini_client:
         return "[Gemini API key missing]"
+
     try:
         contents = []
         for turn in history:
-            contents.append({"role": turn["role"], "parts": [turn["content"]]})
-        contents.append({"role": "user", "parts": [message]})
+            role = "user" if turn["role"] == "user" else "model"
+            contents.append({"role": role, "parts": [turn["content"]]})
 
-        config = {
-            "temperature": float(temperature),
-            "max_output_tokens": int(max_tokens),
-            "system_instruction": build_context(system_prompt, file_context),
-        }
+        contents.append({"role": "user", "parts": [message]})
 
         response = gemini_client.models.generate_content(
             model="gemini-1.5-flash",
             contents=contents,
-            config=config,
+            config=types.GenerateContentConfig(
+                system_instruction=build_context(system_prompt, file_context),
+                temperature=float(temperature),
+                max_output_tokens=int(max_tokens),
+            ),
         )
         return response.text if hasattr(response, "text") else str(response)
     except Exception as e:
@@ -164,31 +182,33 @@ def gemini_answer(message, history, system_prompt, temperature, max_tokens, file
 def claude_answer(message, history, system_prompt, temperature, max_tokens, file_context):
     if not claude_client:
         return "[Claude API key missing]"
+
     try:
         messages = []
         for turn in history:
             messages.append({"role": turn["role"], "content": turn["content"]})
 
-        system_text = build_context(system_prompt, file_context)
-
         response = claude_client.messages.create(
             model="claude-3-5-sonnet-latest",
             max_tokens=int(max_tokens),
             temperature=float(temperature),
-            system=system_text,
+            system=build_context(system_prompt, file_context),
             messages=messages + [{"role": "user", "content": message}],
         )
         return response.content[0].text
     except Exception as e:
         return f"[Claude Error: {e}]"
 
-def respond(message, history, system_prompt, temperature, max_tokens, file_context, model_choice):
-    if model_choice == "Gemini":
-        return gemini_answer(message, history, system_prompt, temperature, max_tokens, file_context)
-    return claude_answer(message, history, system_prompt, temperature, max_tokens, file_context)
+def respond(message, history, system_prompt, temperature, max_tokens, file_context):
+    model_name = choose_model(message, history)
+    if model_name == "Gemini":
+        answer = gemini_answer(message, history, system_prompt, temperature, max_tokens, file_context)
+    else:
+        answer = claude_answer(message, history, system_prompt, temperature, max_tokens, file_context)
+    return answer, model_name
 
 # -------------------------
-# GRADIO UI
+# UI
 # -------------------------
 custom_css = """
 footer {visibility: hidden;}
@@ -196,12 +216,13 @@ footer {visibility: hidden;}
 """
 
 with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), css=custom_css) as demo:
-    gr.Markdown("# ⚡ THUNDER WORKSPACE // Gemini + Claude Router")
-    gr.Markdown("Choose a model manually, then chat with voice, files, and session memory.")
+    gr.Markdown("# ⚡ THUNDER WORKSPACE // Gemini + Claude Auto Router")
+    gr.Markdown("The app chooses Gemini or Claude automatically, based on your prompt.")
 
     session_id = gr.State(None)
     chat_state = gr.State([])
     file_context = gr.State("")
+    current_model = gr.State("")
 
     chatbot = gr.Chatbot(type="messages", height=440)
 
@@ -210,30 +231,27 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
         send_btn = gr.Button("Send", scale=2)
 
     with gr.Row():
-        model_choice = gr.Radio(
-            choices=["Gemini", "Claude"],
-            value="Gemini",
-            label="Choose model"
-        )
         search_toggle = gr.Checkbox(label="🔍 Search web on prompt", value=False)
+        clear_btn = gr.Button("🆕 New chat", variant="stop")
 
     with gr.Row():
         audio_input = gr.Audio(sources=["microphone"], type="filepath", label="Mic Input")
         file_input = gr.File(label="📎 Attachment (.pdf, .txt, .csv, .md, .json)")
-        clear_btn = gr.Button("🆕 New chat", variant="stop")
 
     with gr.Accordion("⚙️ Settings", open=False):
         system_prompt = gr.Textbox(value=DEFAULT_SYSTEM_PROMPT, label="System prompt", lines=3)
         temperature = gr.Slider(0.1, 1.5, value=0.75, step=0.05, label="Temperature")
         max_tokens = gr.Slider(256, 4096, value=1024, step=128, label="Max tokens")
 
+    model_label = gr.Markdown("")
     reply_audio = gr.Audio(label="🔊 Vocal Feedback", autoplay=True)
 
     def start_session():
         sid = str(uuid.uuid4())
-        return sid, load_history(sid), load_history(sid)
+        history = load_history(sid)
+        return sid, history, history, ""
 
-    demo.load(start_session, None, [session_id, chatbot, chat_state])
+    demo.load(start_session, None, [session_id, chatbot, chat_state, model_label])
 
     def on_audio(audio_path):
         return transcribe(audio_path)
@@ -249,24 +267,23 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
         save_message(sid, "user", message)
         return "", history, history
 
-    def bot_reply(history, sys_prompt, temp, tokens, f_context, model_name, sid):
+    def bot_reply(history, sys_prompt, temp, tokens, f_context, sid):
         if not history:
-            return history, history
+            return history, history, "Selected model: none"
 
         user_message = history[-1]["content"]
-        answer = respond(
+        answer, model_name = respond(
             user_message,
             history[:-1],
             sys_prompt,
             temp,
             tokens,
-            f_context,
-            model_name
+            f_context
         )
 
         history = history + [{"role": "assistant", "content": answer}]
         save_message(sid, "assistant", answer)
-        return history, history
+        return history, history, f"Selected model: **{model_name}**"
 
     def bot_speak(history):
         if history and history[-1].get("content"):
@@ -275,7 +292,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
 
     def do_clear(sid):
         clear_history(sid)
-        return [], []
+        return [], [], ""
 
     audio_input.change(on_audio, inputs=[audio_input], outputs=[msg])
     file_input.change(on_file, inputs=[file_input], outputs=[file_context])
@@ -283,7 +300,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
     msg.submit(
         user_send, [msg, chat_state, session_id], [msg, chatbot, chat_state]
     ).then(
-        bot_reply, [chat_state, system_prompt, temperature, max_tokens, file_context, model_choice, session_id], [chatbot, chat_state]
+        bot_reply, [chat_state, system_prompt, temperature, max_tokens, file_context, session_id], [chatbot, chat_state, model_label]
     ).then(
         bot_speak, [chat_state], [reply_audio]
     )
@@ -291,12 +308,12 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
     send_btn.click(
         user_send, [msg, chat_state, session_id], [msg, chatbot, chat_state]
     ).then(
-        bot_reply, [chat_state, system_prompt, temperature, max_tokens, file_context, model_choice, session_id], [chatbot, chat_state]
+        bot_reply, [chat_state, system_prompt, temperature, max_tokens, file_context, session_id], [chatbot, chat_state, model_label]
     ).then(
         bot_speak, [chat_state], [reply_audio]
     )
 
-    clear_btn.click(do_clear, [session_id], [chatbot, chat_state])
+    clear_btn.click(do_clear, [session_id], [chatbot, chat_state, model_label])
 
 port_number = int(os.environ.get("PORT", 10000))
 demo.queue(default_concurrency_limit=3).launch(server_name="0.0.0.0", server_port=port_number)
