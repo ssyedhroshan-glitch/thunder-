@@ -35,7 +35,7 @@ def save_message(session_id, role, content):
 
 def clear_history(session_id):
     conn = sqlite3.connect(DB_PATH)
-    conn.execute("DELETE FROM history WHERE session_id = ?", (session_id,))
+    conn.execute("DELETE WHERE session_id = ?", (session_id,))
     conn.commit()
     conn.close()
 
@@ -44,20 +44,11 @@ def load_history(session_id):
     rows = conn.execute("SELECT role, content FROM history WHERE session_id = ? ORDER BY id", (session_id,)).fetchall()
     conn.close()
     
-    chat_tuples = []
-    temp_user = None
+    # Modern Gradio chatbot layout: list of dictionaries with 'role' and 'content' keys
+    chat_list = []
     for role, content in rows:
-        if role == "user":
-            temp_user = content
-        elif role == "assistant":
-            if temp_user is not None:
-                chat_tuples.append([temp_user, content])
-                temp_user = None
-            else:
-                chat_tuples.append(["", content])
-    if temp_user is not None:
-        chat_tuples.append([temp_user, ""])
-    return chat_tuples
+        chat_list.append({"role": role, "content": content})
+    return chat_list
 
 init_db()
 
@@ -124,9 +115,10 @@ def build_messages(chat_history, system_prompt, file_context, search_context):
         messages.append({"role": "system", "content": "Deep Research Results:\n\n" + search_context})
     if file_context:
         messages.append({"role": "system", "content": "Attached Document Reference:\n\n" + file_context})
-    for u, a in chat_history:
-        if u: messages.append({"role": "user", "content": u})
-        if a: messages.append({"role": "assistant", "content": a})
+    
+    # Process structured chat history dictionaries safely
+    for msg in chat_history:
+        messages.append({"role": msg["role"], "content": msg["content"]})
     return messages
 
 def stream_reply(messages, temperature, max_tokens):
@@ -180,7 +172,7 @@ with gr.Blocks(
     file_context_state = gr.State("")
     features_visible = gr.State(False)
 
-    # TOP ALIGNED NAVIGATION DRAWER
+    # TOP STRIP ARRANGEMENT: Settings left, Theme Matrix options right
     with gr.Row(elem_classes=["header-row"]):
         with gr.Column(scale=3):
             settings_toggle = gr.Checkbox(label="⚙️ Settings Option", value=False, container=False)
@@ -190,16 +182,16 @@ with gr.Blocks(
             theme_choice = gr.Radio(["Dark Matrix", "Light Slate"], value="Dark Matrix", show_label=False, container=False)
             clear_btn = gr.Button("🆕 Reset", variant="stop", size="sm")
 
-    # EXPANDABLE TOP LEFT SYSTEM DRAWER
+    # EXPANDABLE SYSTEM DRAWER IN TOP LEFT
     with gr.Group(visible=False, elem_classes=["panel-card"]) as settings_panel:
         with gr.Row():
             system_prompt = gr.Textbox(value=DEFAULT_SYSTEM_PROMPT, label="Prompt Core Constraints", lines=2)
             temperature = gr.Slider(0.1, 1.5, value=0.70, step=0.05, label="Temperature Matrix")
             max_tokens = gr.Slider(256, 4096, value=1536, step=128, label="Token Window")
 
-    chatbot = gr.Chatbot(height=480, elem_classes=["chatbot-container"])
+    chatbot = gr.Chatbot(height=480, type="messages", elem_classes=["chatbot-container"])
 
-    # HIDDEN EXPANDABLE VAULT
+    # HIDDEN EXPANDABLE TOOLS VAULT
     with gr.Group(visible=False, elem_classes=["panel-card"]) as features_vault:
         gr.Markdown("🌟 **Additional Features Suite**")
         with gr.Row():
@@ -214,7 +206,7 @@ with gr.Blocks(
             with gr.Column(scale=2, min_width=120):
                 canvas_input = gr.Image(sources=["upload"], tool="sketch", type="filepath", label="🎨 Image Editing")
 
-    # CUSTOM STYLED HORIZONTAL CONSOLE ROW
+    # CONSOLE BOX COMPONENT BLOCK
     with gr.Row(elem_classes=["console-row"]):
         features_btn = gr.Button("➕", variant="secondary", size="sm", min_width=50)
         with gr.Column(elem_classes=["msg-container"]):
@@ -270,33 +262,36 @@ with gr.Blocks(
             elif sketch: message = "🎨 [Canvas frame updated]"
         if not message: return "", history, history
         
-        history = history + [[message, ""]]
+        # Standard dictionary formatting configuration
+        history = history + [{"role": "user", "content": message}]
         save_message(sid, "user", message)
         return "", history, history
 
     def bot_reply(history, sys_prompt, temp, tokens, f_context, research_on, sid):
         if not history: return history, history
-        last_user = history[-1][0]
+        last_user = history[-1]["content"]
         search_context = web_search(last_user) if research_on else ""
         
         messages = build_messages(history[:-1], sys_prompt, f_context, search_context)
         messages.append({"role": "user", "content": last_user})
 
+        # Append structured blank response context frame
+        history = history + [{"role": "assistant", "content": ""}]
         final_text = ""
         try:
             for partial in stream_reply(messages, temp, tokens):
                 final_text = partial
-                history[-1][1] = final_text
+                history[-1]["content"] = final_text
                 yield history, history
             save_message(sid, "assistant", final_text)
         except Exception as e:
             err = f"Engine Error: {e}"
-            history[-1][1] = err
+            history[-1]["content"] = err
             save_message(sid, "assistant", err)
             yield history, history
 
     def bot_speak(history):
-        if history and history[-1][1]: return speak(history[-1][1])
+        if history and history[-1]["content"]: return speak(history[-1]["content"])
         return None
 
     def reset_media_slots():
@@ -330,4 +325,3 @@ with gr.Blocks(
 
 port_number = int(os.environ.get("PORT", 10000))
 demo.queue(default_concurrency_limit=4).launch(server_name="0.0.0.0", server_port=port_number)
-            
