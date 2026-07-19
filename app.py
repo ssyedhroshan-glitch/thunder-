@@ -143,12 +143,12 @@ def stream_reply(messages, temperature, max_tokens):
         text += part
         yield text
 
-# --- CORE INTERFACE STYLING (V12.5 MATRIX FIX) ---
+# --- CORE INTERFACE STYLING (V12.6 STRUCTURAL ENGINE CORRECTION) ---
 custom_css = """
 footer {visibility: hidden;}
 .gradio-container {background-color: #0b0f19;}
 
-/* Combines inner nodes into a flat inline layout pill matrix */
+/* Eliminates block wrapping layout bugs and forms an inline navigation pill container */
 .unified-bar-container {
     background-color: #1a202c !important;
     border: 1px solid #2e3748 !important;
@@ -156,7 +156,7 @@ footer {visibility: hidden;}
     padding: 6px 14px !important;
 }
 
-/* Eliminate conflicting margins and wrapper layout configurations */
+/* Hard component overrides to erase nested boundary lines */
 .unified-bar-container > div, 
 .unified-bar-container .form, 
 .unified-bar-container textarea {
@@ -165,7 +165,7 @@ footer {visibility: hidden;}
     box-shadow: none !important;
 }
 
-/* Hard reset on standard file container layout profiles */
+/* Erases layout spacing jumps for attached document elements */
 .unified-bar-container .upload-container {
     padding: 0 !important;
     margin: 0 !important;
@@ -175,7 +175,7 @@ footer {visibility: hidden;}
     display: none !important;
 }
 
-/* Circular submit button node layout */
+/* Execution Button Layout Matrix */
 .thunder-action-btn {
     background: #00cccc !important;
     color: #0b0f19 !important;
@@ -203,32 +203,32 @@ footer {visibility: hidden;}
 """
 
 with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), css=custom_css) as demo:
-    gr.Markdown("# ⚡ THUNDER WORKSPACE // Core v12.5")
+    gr.Markdown("# ⚡ THUNDER WORKSPACE // Core v12.6")
 
     session_id = gr.State(None)
     chatbot = gr.Chatbot(type="messages", height=440)
     chat_state = gr.State([])
 
-    # FIXED LINEAR STRUCTURAL MATRIX
+    # COMPACT HORIZONTAL PILL ALIGNMENT
     with gr.Group(elem_classes=["unified-bar-container"]):
         with gr.Row():
-            # LEFT SIDE: Integrated Quick Attachment File Node
+            # LEFT ATTACHMENT NODE (Strict Pixel Control)
             file_input = gr.File(show_label=False, file_count="single", container=False, min_width=45)
             
-            # CENTER: Primary Text Messaging Window
+            # MAIN CHAT ENTRY CONSOLE
             msg = gr.Textbox(placeholder="Type message or speak...", show_label=False, container=False)
             
-            # RIGHT SIDE: Microphone Control Panel & Lightning Execution Node
+            # RIGHT VOICE INPUT & LIGHTNING SUBMIT
             audio_input = gr.Audio(sources=["microphone"], type="filepath", show_label=False, container=False, min_width=45)
             send_btn = gr.Button("⚡", elem_classes=["thunder-action-btn"], min_width=42)
 
-    # LOWER UTILITIES LAYER
+    # UTILITIES BAR
     with gr.Row(elem_classes=["utility-row"]):
         search_toggle = gr.Checkbox(label="🔍 Search web on prompt", value=False)
         settings_toggle = gr.Checkbox(label="⚙️ Engine Settings", value=False)
         clear_btn = gr.Button("🆕 New chat", variant="stop", size="sm")
 
-    # PREFERENCE SETTING PANEL DRAWER
+    # HIDDEN PREFERENCES DRAWER
     with gr.Group(visible=False, elem_classes=["settings-box"]) as settings_panel:
         with gr.Row():
             system_prompt = gr.Textbox(value=DEFAULT_SYSTEM_PROMPT, label="System prompt", lines=2)
@@ -245,7 +245,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
 
     demo.load(start_session, None, [session_id, chatbot, chat_state])
 
-    # Connect settings panel visualization change toggle
+    # Connect settings panel toggle mechanism
     settings_toggle.change(lambda visible: gr.update(visible=visible), inputs=[settings_toggle], outputs=[settings_panel])
 
     def on_audio(audio_path):
