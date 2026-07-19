@@ -7,7 +7,6 @@ from huggingface_hub import InferenceClient
 
 hf_token = os.environ.get("HF_TOKEN")
 
-# High-Velocity Inference Drivers
 client = InferenceClient(model="Qwen/Qwen2.5-7B-Instruct", token=hf_token)
 whisper_client = InferenceClient(model="openai/whisper-large-v3", token=hf_token)
 tts_client = InferenceClient(model="microsoft/speecht5_tts", token=hf_token)
@@ -63,10 +62,8 @@ def load_history(session_id):
 init_db()
 
 DEFAULT_SYSTEM_PROMPT = (
-    "You are Thunder, an elite, tech-savvy AI collaborator with a sharp mind and a touch of dry wit. "
-    "You talk to the user as a brilliant, supportive peer and co-founder. "
-    "Provide highly insightful, direct, and scannable answers using short headings and clean bullet points. "
-    "Keep your tone authentic, grounded, and engaging."
+    "You are Thunder, an elite, tech-savvy AI collaborator. "
+    "Provide highly insightful, direct, and scannable answers using short headings and clean bullet points."
 )
 
 def transcribe(audio_path):
@@ -161,8 +158,14 @@ body, .gradio-container {background-color: #0b0f19 !important;}
     gap: 10px !important;
 }
 .console-row {
+    display: flex !important;
+    flex-direction: row !important;
     align-items: center !important;
     gap: 8px !important;
+    width: 100% !important;
+}
+.msg-container {
+    flex-grow: 1 !important;
 }
 """
 
@@ -177,7 +180,7 @@ with gr.Blocks(
     file_context_state = gr.State("")
     features_visible = gr.State(False)
 
-    # TOP STRIP: Settings (Top Left) | Theme & Reset (Top Right)
+    # TOP ALIGNED NAVIGATION DRAWER
     with gr.Row(elem_classes=["header-row"]):
         with gr.Column(scale=3):
             settings_toggle = gr.Checkbox(label="⚙️ Settings Option", value=False, container=False)
@@ -187,7 +190,7 @@ with gr.Blocks(
             theme_choice = gr.Radio(["Dark Matrix", "Light Slate"], value="Dark Matrix", show_label=False, container=False)
             clear_btn = gr.Button("🆕 Reset", variant="stop", size="sm")
 
-    # TOP LEFT EXPANDABLE SYSTEM DRAWER
+    # EXPANDABLE TOP LEFT SYSTEM DRAWER
     with gr.Group(visible=False, elem_classes=["panel-card"]) as settings_panel:
         with gr.Row():
             system_prompt = gr.Textbox(value=DEFAULT_SYSTEM_PROMPT, label="Prompt Core Constraints", lines=2)
@@ -196,7 +199,7 @@ with gr.Blocks(
 
     chatbot = gr.Chatbot(height=480, elem_classes=["chatbot-container"])
 
-    # HIDDEN EXPANDABLE ADDITIONAL FEATURES VAULT (Triggered by '+')
+    # HIDDEN EXPANDABLE VAULT
     with gr.Group(visible=False, elem_classes=["panel-card"]) as features_vault:
         gr.Markdown("🌟 **Additional Features Suite**")
         with gr.Row():
@@ -211,18 +214,16 @@ with gr.Blocks(
             with gr.Column(scale=2, min_width=120):
                 canvas_input = gr.Image(sources=["upload"], tool="sketch", type="filepath", label="🎨 Image Editing")
 
-    # CONSOLE BOX ROW: [+] on Left, Input in Center, [⚡] inside right corner
+    # CUSTOM STYLED HORIZONTAL CONSOLE ROW
     with gr.Row(elem_classes=["console-row"]):
-        with gr.Column(scale=1, min_width=50):
-            features_btn = gr.Button("➕", variant="secondary")
-        with gr.Column(scale=10):
+        features_btn = gr.Button("➕", variant="secondary", size="sm", min_width=50)
+        with gr.Column(elem_classes=["msg-container"]):
             msg = gr.Textbox(
                 show_label=False,
                 placeholder="Message Thunder or expand options panel using '+'...",
                 container=False
             )
-        with gr.Column(scale=1, min_width=50):
-            send_btn = gr.Button("⚡", variant="primary")
+        send_btn = gr.Button("⚡", variant="primary", size="sm", min_width=50)
 
     reply_audio = gr.Audio(autoplay=True, visible=False)
 
@@ -232,14 +233,12 @@ with gr.Blocks(
 
     demo.load(start_session, None, [session_id, chatbot, chat_state])
 
-    # Toggle Handlers
     settings_toggle.change(lambda visible: gr.update(visible=visible), inputs=[settings_toggle], outputs=[settings_panel])
     
     def toggle_vault(current_state):
         return not current_state, gr.update(visible=not current_state)
     features_btn.click(toggle_vault, [features_visible], [features_visible, features_vault])
 
-    # Theme Matrix Integration Switcher
     theme_js = """
     (mode) => {
         const body = document.querySelector('body');
@@ -266,9 +265,9 @@ with gr.Blocks(
     def user_send(message, f_context, cam, sketch, history, sid):
         message = (message or "").strip()
         if not message:
-            if f_context: message = "⚡ [Analyzed Document Payload Attached]"
-            elif cam: message = "📷 [Webcam Frame Ingested]"
-            elif sketch: message = "🎨 [Canvas Image Layout Modified]"
+            if f_context: message = "⚡ [File payload analyzed]"
+            elif cam: message = "📷 [Camera stream frame captured]"
+            elif sketch: message = "🎨 [Canvas frame updated]"
         if not message: return "", history, history
         
         history = history + [[message, ""]]
@@ -331,3 +330,4 @@ with gr.Blocks(
 
 port_number = int(os.environ.get("PORT", 10000))
 demo.queue(default_concurrency_limit=4).launch(server_name="0.0.0.0", server_port=port_number)
+            
