@@ -143,19 +143,20 @@ def stream_reply(messages, temperature, max_tokens):
         text += part
         yield text
 
+# Production CSS Matrix targeting core interface frames
 custom_css = """
 footer {visibility: hidden;}
 .gradio-container {background-color: #0b0f19;}
-.panel-card {
+.panel-wrapper {
     background-color: #1a202c !important; 
     border: 1px solid #2e3748 !important;
-    border-radius: 12px !important;
-    padding: 16px !important;
+    border-radius: 8px !important;
+    padding: 12px !important;
 }
 """
 
 with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), css=custom_css) as demo:
-    gr.Markdown("# ⚡ THUNDER WORKSPACE // Core v15.0")
+    gr.Markdown("# ⚡ THUNDER WORKSPACE // Core v16.0")
 
     session_id = gr.State(None)
     chat_state = gr.State([])
@@ -167,35 +168,35 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
     with gr.Row():
         with gr.Column(scale=9):
             msg = gr.Textbox(
-                placeholder="Type instructions or message...", 
+                placeholder="Type instructions or paste details here...", 
                 show_label=False, 
                 container=False
             )
         with gr.Column(scale=1, min_width=80):
             send_btn = gr.Button("⚡ Run", variant="primary")
 
-    # STABLE DECOUPLED ACCESSORIES DECK
+    # NATIVE ISOLATED ACCESSORIES PANEL
     with gr.Row():
         with gr.Column(scale=5):
-            with gr.Box(elem_classes=["panel-card"]):
-                gr.Markdown("📂 **File Attachment Port**")
+            with gr.Group(elem_classes=["panel-wrapper"]):
+                gr.Markdown("📂 **File Context Input Port**")
                 file_input = gr.File(show_label=False, file_count="single")
         with gr.Column(scale=5):
-            with gr.Box(elem_classes=["panel-card"]):
-                gr.Markdown("🎤 **Vocal Stream Console**")
+            with gr.Group(elem_classes=["panel-wrapper"]):
+                gr.Markdown("🎤 **Vocal Streaming Console**")
                 audio_input = gr.Audio(sources=["microphone"], type="filepath", show_label=False)
 
-    # DASHBOARD ACCESSORIES
+    # GLOBAL ENGINE CONTROLS
     with gr.Row():
-        search_toggle = gr.Checkbox(label="🔍 Dynamic Web Search", value=False)
-        settings_toggle = gr.Checkbox(label="⚙️ Engine Parameters Drawer", value=False)
-        clear_btn = gr.Button("🆕 Restart Workspace", variant="stop", size="sm")
+        search_toggle = gr.Checkbox(label="🔍 Dynamic Web Search Mode", value=False)
+        settings_toggle = gr.Checkbox(label="⚙️ Toggle Advanced Configuration", value=False)
+        clear_btn = gr.Button("🆕 Refresh Session", variant="stop", size="sm")
 
     # EXPANDABLE SETTINGS SYSTEM
-    with gr.Box(visible=False, elem_classes=["panel-card"]) as settings_panel:
+    with gr.Group(visible=False, elem_classes=["panel-wrapper"]) as settings_panel:
         with gr.Row():
             system_prompt = gr.Textbox(value=DEFAULT_SYSTEM_PROMPT, label="Prompt Engine Rules", lines=2)
-            temperature = gr.Slider(0.1, 1.5, value=0.75, step=0.05, label="Temperature Blueprint")
+            temperature = gr.Slider(0.1, 1.5, value=0.75, step=0.05, label="Sampling Temperature")
             max_tokens = gr.Slider(256, 4096, value=1024, step=128, label="Token Capacity Window")
 
     reply_audio = gr.Audio(autoplay=True, visible=False)
@@ -278,4 +279,3 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
 
 port_number = int(os.environ.get("PORT", 10000))
 demo.queue(default_concurrency_limit=3).launch(server_name="0.0.0.0", server_port=port_number)
-                       
