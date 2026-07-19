@@ -7,6 +7,7 @@ from huggingface_hub import InferenceClient
 
 hf_token = os.environ.get("HF_TOKEN")
 
+# High-Velocity Inference Clients
 client = InferenceClient(model="Qwen/Qwen2.5-7B-Instruct", token=hf_token)
 whisper_client = InferenceClient(model="openai/whisper-large-v3", token=hf_token)
 tts_client = InferenceClient(model="microsoft/speecht5_tts", token=hf_token)
@@ -29,22 +30,28 @@ def init_db():
 
 def save_message(session_id, role, content):
     conn = sqlite3.connect(DB_PATH)
-    conn.execute("INSERT INTO history (session_id, role, content) VALUES (?, ?, ?)", (session_id, role, content))
+    conn.execute(
+        "INSERT INTO history (session_id, role, content) VALUES (?, ?, ?)",
+        (session_id, role, content)
+    )
     conn.commit()
     conn.close()
 
 def clear_history(session_id):
     conn = sqlite3.connect(DB_PATH)
-    conn.execute("DELETE WHERE session_id = ?", (session_id,))
+    conn.execute("DELETE FROM history WHERE session_id = ?", (session_id,))
     conn.commit()
     conn.close()
 
 def load_history(session_id):
     conn = sqlite3.connect(DB_PATH)
-    rows = conn.execute("SELECT role, content FROM history WHERE session_id = ? ORDER BY id", (session_id,)).fetchall()
+    rows = conn.execute(
+        "SELECT role, content FROM history WHERE session_id = ? ORDER BY id",
+        (session_id,)
+    ).fetchall()
     conn.close()
     
-    # Modern Gradio chatbot layout: list of dictionaries with 'role' and 'content' keys
+    # Universal fallback list parser
     chat_list = []
     for role, content in rows:
         chat_list.append({"role": role, "content": content})
@@ -53,8 +60,10 @@ def load_history(session_id):
 init_db()
 
 DEFAULT_SYSTEM_PROMPT = (
-    "You are Thunder, an elite, tech-savvy AI collaborator. "
-    "Provide highly insightful, direct, and scannable answers using short headings and clean bullet points."
+    "You are Thunder, an elite, tech-savvy AI collaborator with a sharp mind and a touch of dry wit. "
+    "You talk to the user as a brilliant, supportive peer and co-founder. "
+    "Provide highly insightful, direct, and scannable answers using short headings and clean bullet points. "
+    "Keep your tone authentic, grounded, and engaging. Never use robotic disclaimers."
 )
 
 def transcribe(audio_path):
@@ -105,7 +114,7 @@ def web_search(query, max_results=3):
             results = list(ddgs.text(query, max_results=max_results))
         if not results:
             return ""
-        return "\n".join(f"- {r.get('title','')}: {r.get('body','')} ({r.get('href','')})" for r in results[:max_results])
+        return "\n".join(f"- {r.get('title','')}: {r.get('body','')} ({r.get('href', '')})" for r in results[:max_results])
     except Exception as e:
         return f"[Deep Research Error: {e}]"
 
@@ -116,14 +125,23 @@ def build_messages(chat_history, system_prompt, file_context, search_context):
     if file_context:
         messages.append({"role": "system", "content": "Attached Document Reference:\n\n" + file_context})
     
-    # Process structured chat history dictionaries safely
+    # Process structured chat history objects robustly
     for msg in chat_history:
-        messages.append({"role": msg["role"], "content": msg["content"]})
+        if isinstance(msg, dict):
+            messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
+        elif isinstance(msg, (list, tuple)) and len(msg) >= 2:
+            if msg[0]: messages.append({"role": "user", "content": msg[0]})
+            if msg[1]: messages.append({"role": "assistant", "content": msg[1]})
     return messages
 
 def stream_reply(messages, temperature, max_tokens):
     text = ""
-    for chunk in client.chat.completions.create(messages=messages, max_tokens=max_tokens, temperature=temperature, stream=True):
+    for chunk in client.chat.completions.create(
+        messages=messages,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        stream=True
+    ):
         text += chunk.choices[0].delta.content or ""
         yield text
 
@@ -135,6 +153,7 @@ body, .gradio-container {background-color: #0b0f19 !important;}
     border: 1px solid #1f293d !important;
     border-radius: 12px !important;
     padding: 14px !important;
+    margin-bottom: 10px !important;
 }
 .chatbot-container {
     border: 1px solid #1f293d !important;
@@ -148,6 +167,7 @@ body, .gradio-container {background-color: #0b0f19 !important;}
     display: flex !important;
     justify-content: flex-end !important;
     gap: 10px !important;
+    align-items: center !important;
 }
 .console-row {
     display: flex !important;
@@ -172,7 +192,7 @@ with gr.Blocks(
     file_context_state = gr.State("")
     features_visible = gr.State(False)
 
-    # TOP STRIP ARRANGEMENT: Settings left, Theme Matrix options right
+    # TOP ALIGNED RUNTIME ROW
     with gr.Row(elem_classes=["header-row"]):
         with gr.Column(scale=3):
             settings_toggle = gr.Checkbox(label="⚙️ Settings Option", value=False, container=False)
@@ -182,16 +202,16 @@ with gr.Blocks(
             theme_choice = gr.Radio(["Dark Matrix", "Light Slate"], value="Dark Matrix", show_label=False, container=False)
             clear_btn = gr.Button("🆕 Reset", variant="stop", size="sm")
 
-    # EXPANDABLE SYSTEM DRAWER IN TOP LEFT
+    # EXPANDABLE TOP SYSTEM DRAWER (Settings toggle)
     with gr.Group(visible=False, elem_classes=["panel-card"]) as settings_panel:
         with gr.Row():
             system_prompt = gr.Textbox(value=DEFAULT_SYSTEM_PROMPT, label="Prompt Core Constraints", lines=2)
             temperature = gr.Slider(0.1, 1.5, value=0.70, step=0.05, label="Temperature Matrix")
             max_tokens = gr.Slider(256, 4096, value=1536, step=128, label="Token Window")
 
-    chatbot = gr.Chatbot(height=480, type="messages", elem_classes=["chatbot-container"])
+    chatbot = gr.Chatbot(height=480, elem_classes=["chatbot-container"])
 
-    # HIDDEN EXPANDABLE TOOLS VAULT
+    # HIDDEN OPTION EXPANSION VAULT (Triggered by '+')
     with gr.Group(visible=False, elem_classes=["panel-card"]) as features_vault:
         gr.Markdown("🌟 **Additional Features Suite**")
         with gr.Row():
@@ -204,9 +224,9 @@ with gr.Blocks(
             with gr.Column(scale=2, min_width=120):
                 camera_input = gr.Image(sources=["webcam"], type="filepath", label="📷 Camera")
             with gr.Column(scale=2, min_width=120):
-                canvas_input = gr.Image(sources=["upload"], tool="sketch", type="filepath", label="🎨 Image Editing")
+                canvas_input = gr.Image(sources=["upload"], type="filepath", label="🎨 Image Editing")
 
-    # CONSOLE BOX COMPONENT BLOCK
+    # CUSTOM NESTED INPUT BAR (Single Horizontal Pill shape)
     with gr.Row(elem_classes=["console-row"]):
         features_btn = gr.Button("➕", variant="secondary", size="sm", min_width=50)
         with gr.Column(elem_classes=["msg-container"]):
@@ -221,16 +241,19 @@ with gr.Blocks(
 
     def start_session():
         sid = str(uuid.uuid4())
-        return sid, load_history(sid), load_history(sid)
+        initial_history = load_history(sid)
+        return sid, initial_history, initial_history
 
     demo.load(start_session, None, [session_id, chatbot, chat_state])
 
+    # Settings Event mapping
     settings_toggle.change(lambda visible: gr.update(visible=visible), inputs=[settings_toggle], outputs=[settings_panel])
     
     def toggle_vault(current_state):
         return not current_state, gr.update(visible=not current_state)
     features_btn.click(toggle_vault, [features_visible], [features_visible, features_vault])
 
+    # Light Slate vs Dark Matrix runtime swapper
     theme_js = """
     (mode) => {
         const body = document.querySelector('body');
@@ -262,36 +285,55 @@ with gr.Blocks(
             elif sketch: message = "🎨 [Canvas frame updated]"
         if not message: return "", history, history
         
-        # Standard dictionary formatting configuration
-        history = history + [{"role": "user", "content": message}]
+        # Determine current state list formats dynamically
+        if len(history) > 0 and isinstance(history[0], dict):
+            new_history = history + [{"role": "user", "content": message}]
+        else:
+            new_history = history + [[message, ""]]
+            
         save_message(sid, "user", message)
-        return "", history, history
+        return "", new_history, new_history
 
     def bot_reply(history, sys_prompt, temp, tokens, f_context, research_on, sid):
         if not history: return history, history
-        last_user = history[-1]["content"]
-        search_context = web_search(last_user) if research_on else ""
         
+        # Adaptive history extraction parser
+        is_dict = isinstance(history[0], dict)
+        last_user = history[-1]["content"] if is_dict else history[-1][0]
+        
+        search_context = web_search(last_user) if research_on else ""
         messages = build_messages(history[:-1], sys_prompt, f_context, search_context)
         messages.append({"role": "user", "content": last_user})
 
-        # Append structured blank response context frame
-        history = history + [{"role": "assistant", "content": ""}]
+        if is_dict:
+            history = history + [{"role": "assistant", "content": ""}]
+        else:
+            history = history + [[last_user, ""]]
+
         final_text = ""
         try:
             for partial in stream_reply(messages, temp, tokens):
                 final_text = partial
-                history[-1]["content"] = final_text
+                if is_dict:
+                    history[-1]["content"] = final_text
+                else:
+                    history[-1][1] = final_text
                 yield history, history
             save_message(sid, "assistant", final_text)
         except Exception as e:
             err = f"Engine Error: {e}"
-            history[-1]["content"] = err
+            if is_dict:
+                history[-1]["content"] = err
+            else:
+                history[-1][1] = err
             save_message(sid, "assistant", err)
             yield history, history
 
     def bot_speak(history):
-        if history and history[-1]["content"]: return speak(history[-1]["content"])
+        if not history: return None
+        is_dict = isinstance(history[0], dict)
+        text = history[-1]["content"] if is_dict else history[-1][1]
+        if text: return speak(text)
         return None
 
     def reset_media_slots():
