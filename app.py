@@ -143,100 +143,63 @@ def stream_reply(messages, temperature, max_tokens):
         text += part
         yield text
 
-# --- CORE INTERFACE STYLING (V12.6 STRUCTURAL ENGINE CORRECTION) ---
+# Clean, responsive CSS layout targeting the workspace frame
 custom_css = """
 footer {visibility: hidden;}
 .gradio-container {background-color: #0b0f19;}
-
-/* Eliminates block wrapping layout bugs and forms an inline navigation pill container */
-.unified-bar-container {
-    background-color: #1a202c !important;
+.panel-box {
+    background-color: #1a202c !important; 
     border: 1px solid #2e3748 !important;
-    border-radius: 32px !important;
-    padding: 6px 14px !important;
-}
-
-/* Hard component overrides to erase nested boundary lines */
-.unified-bar-container > div, 
-.unified-bar-container .form, 
-.unified-bar-container textarea {
-    background: transparent !important;
-    border: none !important;
-    box-shadow: none !important;
-}
-
-/* Erases layout spacing jumps for attached document elements */
-.unified-bar-container .upload-container {
-    padding: 0 !important;
-    margin: 0 !important;
-    min-height: unset !important;
-}
-.unified-bar-container .file-preview {
-    display: none !important;
-}
-
-/* Execution Button Layout Matrix */
-.thunder-action-btn {
-    background: #00cccc !important;
-    color: #0b0f19 !important;
-    border-radius: 50% !important;
-    font-size: 16px !important;
-    height: 42px !important;
-    padding: 0 !important;
-    cursor: pointer !important;
-    box-shadow: 0 0 8px rgba(0, 204, 204, 0.4);
-}
-.thunder-action-btn:hover {
-    background: #00ffff !important;
-}
-
-.utility-row {
-    margin-top: 8px !important;
-}
-.settings-box {
-    margin-top: 8px;
+    border-radius: 8px;
     padding: 12px;
-    border: 1px solid #2e3748;
-    background-color: #1a202c !important;
-    border-radius: 6px;
 }
 """
 
 with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), css=custom_css) as demo:
-    gr.Markdown("# ⚡ THUNDER WORKSPACE // Core v12.6")
+    gr.Markdown("# ⚡ THUNDER WORKSPACE // Core v14.0")
 
     session_id = gr.State(None)
-    chatbot = gr.Chatbot(type="messages", height=440)
     chat_state = gr.State([])
-
-    # COMPACT HORIZONTAL PILL ALIGNMENT
-    with gr.Group(elem_classes=["unified-bar-container"]):
-        with gr.Row():
-            # LEFT ATTACHMENT NODE (Strict Pixel Control)
-            file_input = gr.File(show_label=False, file_count="single", container=False, min_width=45)
-            
-            # MAIN CHAT ENTRY CONSOLE
-            msg = gr.Textbox(placeholder="Type message or speak...", show_label=False, container=False)
-            
-            # RIGHT VOICE INPUT & LIGHTNING SUBMIT
-            audio_input = gr.Audio(sources=["microphone"], type="filepath", show_label=False, container=False, min_width=45)
-            send_btn = gr.Button("⚡", elem_classes=["thunder-action-btn"], min_width=42)
-
-    # UTILITIES BAR
-    with gr.Row(elem_classes=["utility-row"]):
-        search_toggle = gr.Checkbox(label="🔍 Search web on prompt", value=False)
-        settings_toggle = gr.Checkbox(label="⚙️ Engine Settings", value=False)
-        clear_btn = gr.Button("🆕 New chat", variant="stop", size="sm")
-
-    # HIDDEN PREFERENCES DRAWER
-    with gr.Group(visible=False, elem_classes=["settings-box"]) as settings_panel:
-        with gr.Row():
-            system_prompt = gr.Textbox(value=DEFAULT_SYSTEM_PROMPT, label="System prompt", lines=2)
-            temperature = gr.Slider(0.1, 1.5, value=0.75, step=0.05, label="Temperature")
-            max_tokens = gr.Slider(256, 4096, value=1024, step=128, label="Max tokens")
-
-    reply_audio = gr.Audio(label="🔊 Vocal Feedback", autoplay=True, visible=False)
     file_context = gr.State("")
+    
+    chatbot = gr.Chatbot(type="messages", height=450)
+
+    # SECURE CONTROLS MATRIX (Standard native blocks to ensure compiler stability)
+    with gr.Row():
+        with gr.Column(scale=8):
+            msg = gr.Textbox(
+                placeholder="Type your instruction or message here...", 
+                show_label=False, 
+                container=False
+            )
+        with gr.Column(scale=2, min_width=100):
+            send_btn = gr.Button("⚡ Execute", variant="primary")
+
+    # EXPANDED UTILITY PANEL 
+    with gr.Row():
+        with gr.Column(scale=5):
+            with gr.Group(elem_classes=["panel-box"]):
+                gr.Markdown("📂 **Context Enrichment Drop**")
+                file_input = gr.File(show_label=False, file_count="single")
+        with gr.Column(scale=5):
+            with gr.Group(elem_classes=["panel-box"]):
+                gr.Markdown("🎤 **Vocal Input Console**")
+                audio_input = gr.Audio(sources=["microphone"], type="filepath", show_label=False)
+
+    # SYSTEM CONTROLS FOOTER
+    with gr.Row():
+        search_toggle = gr.Checkbox(label="🔍 Real-time Web Search Integration", value=False)
+        settings_toggle = gr.Checkbox(label="⚙️ Toggle Engine Configuration Drawer", value=False)
+        clear_btn = gr.Button("🆕 Refresh Session Workspace", variant="stop", size="sm")
+
+    # CONFIGdrawer INTERFACE
+    with gr.Group(visible=False, elem_classes=["panel-box"]) as settings_panel:
+        with gr.Row():
+            system_prompt = gr.Textbox(value=DEFAULT_SYSTEM_PROMPT, label="Core Prompt Directives", lines=2)
+            temperature = gr.Slider(0.1, 1.5, value=0.75, step=0.05, label="Sampling Temperature Blueprint")
+            max_tokens = gr.Slider(256, 4096, value=1024, step=128, label="Token Response Ceiling")
+
+    reply_audio = gr.Audio(label="Vocal Playback feedback loop", autoplay=True, visible=False)
 
     def start_session():
         sid = str(uuid.uuid4())
@@ -245,7 +208,6 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
 
     demo.load(start_session, None, [session_id, chatbot, chat_state])
 
-    # Connect settings panel toggle mechanism
     settings_toggle.change(lambda visible: gr.update(visible=visible), inputs=[settings_toggle], outputs=[settings_panel])
 
     def on_audio(audio_path):
