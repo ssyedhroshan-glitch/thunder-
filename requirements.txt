@@ -1,4 +1,6 @@
-gradio>=4.44.0
-huggingface_hub>=0.24.0
-pypdf>=4.0.0
-duckduckgo_search>=6.0.0
+gradio
+huggingface_hub
+google-genai
+anthropic
+pypdf
+duckduckgo-search
