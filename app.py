@@ -7,6 +7,7 @@ from huggingface_hub import InferenceClient
 
 hf_token = os.environ.get("HF_TOKEN")
 
+# High-Velocity Inference Drivers
 client = InferenceClient(model="Qwen/Qwen2.5-7B-Instruct", token=hf_token)
 whisper_client = InferenceClient(model="openai/whisper-large-v3", token=hf_token)
 tts_client = InferenceClient(model="microsoft/speecht5_tts", token=hf_token)
@@ -139,9 +140,7 @@ def stream_reply(messages, temperature, max_tokens):
 
 custom_css = """
 footer {visibility: hidden;}
-body, .gradio-container {background-color: #0b0f19 !important; core-transition: all 0.3s ease;}
-.dark-mode {background-color: #0b0f19 !important;}
-.light-mode {background-color: #f7fafc !important;}
+body, .gradio-container {background-color: #0b0f19 !important;}
 .panel-card {
     background-color: #121826 !important; 
     border: 1px solid #1f293d !important;
@@ -178,17 +177,17 @@ with gr.Blocks(
     file_context_state = gr.State("")
     features_visible = gr.State(False)
 
-    # TOP ALIGNED NAVIGATION DRAWER (Settings left, Theme options right)
+    # TOP STRIP: Settings (Top Left) | Theme & Reset (Top Right)
     with gr.Row(elem_classes=["header-row"]):
         with gr.Column(scale=3):
-            settings_toggle = gr.Checkbox(label="⚙️ Settings Drawer", value=False, container=False)
+            settings_toggle = gr.Checkbox(label="⚙️ Settings Option", value=False, container=False)
         with gr.Column(scale=4):
             gr.Markdown("<center><h2 style='margin:0; padding:0; color:#22d3ee;'>⚡ THUNDER WORKSPACE</h2></center>")
         with gr.Column(scale=3, elem_classes=["flex-end-layout"]):
             theme_choice = gr.Radio(["Dark Matrix", "Light Slate"], value="Dark Matrix", show_label=False, container=False)
             clear_btn = gr.Button("🆕 Reset", variant="stop", size="sm")
 
-    # EXPANDABLE LEFT SYSTEM CONFIGURATION DRAWER
+    # TOP LEFT EXPANDABLE SYSTEM DRAWER
     with gr.Group(visible=False, elem_classes=["panel-card"]) as settings_panel:
         with gr.Row():
             system_prompt = gr.Textbox(value=DEFAULT_SYSTEM_PROMPT, label="Prompt Core Constraints", lines=2)
@@ -197,22 +196,22 @@ with gr.Blocks(
 
     chatbot = gr.Chatbot(height=480, elem_classes=["chatbot-container"])
 
-    # HIDDEN ANCHORED ADDITIONAL FEATURES EXPANSION VAULT
+    # HIDDEN EXPANDABLE ADDITIONAL FEATURES VAULT (Triggered by '+')
     with gr.Group(visible=False, elem_classes=["panel-card"]) as features_vault:
-        gr.Markdown("🌟 **Expanded Functional Suite Tools**")
+        gr.Markdown("🌟 **Additional Features Suite**")
         with gr.Row():
             with gr.Column(scale=2, min_width=120):
                 file_input = gr.File(label="📎 Add File", file_count="single", file_types=[".txt", ".pdf", ".md", ".py", ".json", ".csv"])
             with gr.Column(scale=2, min_width=120):
-                audio_input = gr.Audio(sources=["microphone"], type="filepath", label="🎤 Mic Port")
+                audio_input = gr.Audio(sources=["microphone"], type="filepath", label="🎤 Mic")
             with gr.Column(scale=2, min_width=120):
                 research_toggle = gr.Checkbox(label="🔍 Deep Research", value=False)
             with gr.Column(scale=2, min_width=120):
-                camera_input = gr.Image(sources=["webcam"], type="filepath", label="📷 Camera Portal")
+                camera_input = gr.Image(sources=["webcam"], type="filepath", label="📷 Camera")
             with gr.Column(scale=2, min_width=120):
-                canvas_input = gr.Image(tool="sketch", type="filepath", label="🎨 Image Canvas Editing")
+                canvas_input = gr.Image(sources=["upload"], tool="sketch", type="filepath", label="🎨 Image Editing")
 
-    # CENTRAL COMMAND INPUT BAR
+    # CONSOLE BOX ROW: [+] on Left, Input in Center, [⚡] inside right corner
     with gr.Row(elem_classes=["console-row"]):
         with gr.Column(scale=1, min_width=50):
             features_btn = gr.Button("➕", variant="secondary")
@@ -233,14 +232,14 @@ with gr.Blocks(
 
     demo.load(start_session, None, [session_id, chatbot, chat_state])
 
-    # DISPLAY INTERACTION LISTENERS
+    # Toggle Handlers
     settings_toggle.change(lambda visible: gr.update(visible=visible), inputs=[settings_toggle], outputs=[settings_panel])
     
     def toggle_vault(current_state):
         return not current_state, gr.update(visible=not current_state)
     features_btn.click(toggle_vault, [features_visible], [features_visible, features_vault])
 
-    # LIGHT/DARK MATRIX DYNAMIC STYLING SWAPPER
+    # Theme Matrix Integration Switcher
     theme_js = """
     (mode) => {
         const body = document.querySelector('body');
@@ -267,9 +266,9 @@ with gr.Blocks(
     def user_send(message, f_context, cam, sketch, history, sid):
         message = (message or "").strip()
         if not message:
-            if f_context: message = "⚡ [File analysis payload attached]"
-            elif cam: message = "📷 [Webcam data frame targeted]"
-            elif sketch: message = "🎨 [Image editing layout frame submitted]"
+            if f_context: message = "⚡ [Analyzed Document Payload Attached]"
+            elif cam: message = "📷 [Webcam Frame Ingested]"
+            elif sketch: message = "🎨 [Canvas Image Layout Modified]"
         if not message: return "", history, history
         
         history = history + [[message, ""]]
@@ -332,4 +331,3 @@ with gr.Blocks(
 
 port_number = int(os.environ.get("PORT", 10000))
 demo.queue(default_concurrency_limit=4).launch(server_name="0.0.0.0", server_port=port_number)
-            
