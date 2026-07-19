@@ -50,7 +50,6 @@ def load_history(session_id):
     ).fetchall()
     conn.close()
     
-    # Map to legacy universal tuple structure format: [[user, bot], ...]
     chat_tuples = []
     temp_user = None
     for role, content in rows:
@@ -99,13 +98,11 @@ def speak(text):
     except Exception:
         return None
 
-def read_file(file_obj):
-    if file_obj is None:
+def read_file(file_path):
+    if not file_path or not os.path.exists(file_path):
         return ""
     try:
-        file_path = file_obj.name if hasattr(file_obj, "name") else file_obj
         ext = os.path.splitext(file_path)[1].lower()
-
         if ext == ".pdf":
             from pypdf import PdfReader
             reader = PdfReader(file_path)
@@ -115,7 +112,6 @@ def read_file(file_obj):
                 text = f.read()
         else:
             return f"[Unsupported file type: {ext}]"
-
         return text[:12000]
     except Exception as e:
         return f"[File Read Error: {e}]"
@@ -163,9 +159,10 @@ def stream_reply(messages, temperature, max_tokens):
         text += part
         yield text
 
+# Premium styling layer to eliminate light flash frames
 custom_css = """
 footer {visibility: hidden;}
-.gradio-container {background-color: #0b0f19;}
+body, .gradio-container {background-color: #0b0f19 !important;}
 .panel-card {
     background-color: #1a202c !important; 
     border: 1px solid #2e3748 !important;
@@ -174,43 +171,41 @@ footer {visibility: hidden;}
 }
 """
 
-with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), css=custom_css) as demo:
-    gr.Markdown("# ⚡ THUNDER WORKSPACE // Core v18.0")
+# Force absolute dark mode injection via javascript + config instantiation
+with gr.Blocks(
+    theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
+    css=custom_css,
+    js="() => { document.querySelector('body').classList.add('dark'); }"
+) as demo:
+    
+    gr.Markdown("# ⚡ THUNDER WORKSPACE // True Dark Core")
 
     session_id = gr.State(None)
     chat_state = gr.State([])
-    file_context = gr.State("")
+    file_context_state = gr.State("")
     
-    # Universal fallback layout component syntax
-    chatbot = gr.Chatbot(height=450)
+    chatbot = gr.Chatbot(height=480)
 
-    # SECURE MESSAGE INPUT CONSOLE
-    with gr.Row():
-        with gr.Column(scale=9):
-            msg = gr.Textbox(
-                placeholder="Type instructions or message...", 
-                show_label=False, 
-                container=False
-            )
-        with gr.Column(scale=1, min_width=80):
-            send_btn = gr.Button("⚡ Run", variant="primary")
+    # NATIVE MULTIMODAL CONSOLE - Places the '+' button flawlessly on the left flank
+    msg = gr.MultimodalTextbox(
+        show_label=False,
+        placeholder="Type a message or press + to attach a file...",
+        container=True,
+        file_types=[".txt", ".pdf", ".md", ".py", ".json", ".csv"]
+    )
 
-    # STABLE DECOUPLED ACCESSORIES PANEL
+    # CORE CONTROL FRAME 
     with gr.Row():
-        with gr.Column(scale=5):
+        with gr.Column(scale=6):
             with gr.Group(elem_classes=["panel-card"]):
-                gr.Markdown("📂 **File Attachment Port**")
-                file_input = gr.File(show_label=False, file_count="single")
-        with gr.Column(scale=5):
-            with gr.Group(elem_classes=["panel-card"]):
-                gr.Markdown("🎤 **Vocal Stream Console**")
+                gr.Markdown("🎤 **Vocal Stream Deck**")
                 audio_input = gr.Audio(sources=["microphone"], type="filepath", show_label=False)
-
-    # DASHBOARD ACCESSORIES
-    with gr.Row():
-        search_toggle = gr.Checkbox(label="🔍 Dynamic Web Search", value=False)
-        settings_toggle = gr.Checkbox(label="⚙️ Engine Parameters Drawer", value=False)
-        clear_btn = gr.Button("🆕 Restart Workspace", variant="stop", size="sm")
+        with gr.Column(scale=4):
+            with gr.Group(elem_classes=["panel-card"]):
+                gr.Markdown("🛠️ **Quick Action Switches**")
+                search_toggle = gr.Checkbox(label="🔍 Dynamic Web Search", value=False)
+                settings_toggle = gr.Checkbox(label="⚙️ Engine Parameters", value=False)
+                clear_btn = gr.Button("🆕 Reset Workspace", variant="stop", size="sm")
 
     # EXPANDABLE SETTINGS SYSTEM
     with gr.Group(visible=False, elem_classes=["panel-card"]) as settings_panel:
@@ -231,18 +226,27 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
     settings_toggle.change(lambda visible: gr.update(visible=visible), inputs=[settings_toggle], outputs=[settings_panel])
 
     def on_audio(audio_path):
-        return transcribe(audio_path)
+        if not audio_path:
+            return gr.update()
+        text = transcribe(audio_path)
+        return gr.update(value={"text": text, "files": []})
 
-    def on_file(file_obj):
-        return read_file(file_obj)
+    def handle_submit(payload, history, sid):
+        text_content = payload.get("text", "").strip()
+        files = payload.get("files", [])
+        
+        extracted_context = ""
+        if files:
+            extracted_context = read_file(files[0])
+            if text_content == "":
+                text_content = f"[Uploaded Document: {os.path.basename(files[0])}]"
+        
+        if not text_content and not extracted_context:
+            return gr.update(value=None, interactive=True), history, history, ""
 
-    def user_send(message, history, sid):
-        message = (message or "").strip()
-        if not message:
-            return "", history, history
-        history = history + [[message, ""]]
-        save_message(sid, "user", message)
-        return "", history, history
+        history = history + [[text_content, ""]]
+        save_message(sid, "user", text_content)
+        return gr.update(value=None, interactive=False), history, history, extracted_context
 
     def bot_reply(history, sys_prompt, temp, tokens, f_context, search_on, sid):
         if not history:
@@ -250,7 +254,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
 
         last_user = history[-1][0]
         search_context = web_search(last_user) if search_on else ""
-        # Build prompt messaging list using everything up to the active query turn
+        
         messages = build_messages(history[:-1], sys_prompt, f_context, search_context)
         messages.append({"role": "user", "content": last_user})
 
@@ -272,30 +276,30 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
             return speak(history[-1][1])
         return None
 
+    def make_interactive():
+        return gr.update(interactive=True)
+
     def do_clear(sid):
         clear_history(sid)
-        return [], []
+        return [], [], ""
 
     audio_input.change(on_audio, inputs=[audio_input], outputs=[msg])
-    file_input.change(on_file, inputs=[file_input], outputs=[file_context])
 
     msg.submit(
-        user_send, [msg, chat_state, session_id], [msg, chatbot, chat_state]
+        handle_submit, 
+        [msg, chat_state, session_id], 
+        [msg, chatbot, chat_state, file_context_state]
     ).then(
-        bot_reply, [chat_state, system_prompt, temperature, max_tokens, file_context, search_toggle, session_id], [chatbot, chat_state]
-    ).then(
-        bot_speak, [chat_state], [reply_audio]
-    )
-
-    send_btn.click(
-        user_send, [msg, chat_state, session_id], [msg, chatbot, chat_state]
-    ).then(
-        bot_reply, [chat_state, system_prompt, temperature, max_tokens, file_context, search_toggle, session_id], [chatbot, chat_state]
+        bot_reply, 
+        [chat_state, system_prompt, temperature, max_tokens, file_context_state, search_toggle, session_id], 
+        [chatbot, chat_state]
     ).then(
         bot_speak, [chat_state], [reply_audio]
+    ).then(
+        make_interactive, None, [msg]
     )
 
-    clear_btn.click(do_clear, [session_id], [chatbot, chat_state])
+    clear_btn.click(do_clear, [session_id], [chatbot, chat_state, file_context_state])
 
 port_number = int(os.environ.get("PORT", 10000))
 demo.queue(default_concurrency_limit=3).launch(server_name="0.0.0.0", server_port=port_number)
