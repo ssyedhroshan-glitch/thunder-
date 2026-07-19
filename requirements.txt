@@ -1,4 +1,6 @@
-huggingface_hub
 gradio
+google-genai
+anthropic
+huggingface_hub
 pypdf
-duckduckgo_search
+duckduckgo-search
