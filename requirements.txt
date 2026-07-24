@@ -1,6 +1,6 @@
-gradio
+gradio==5.16.0
 huggingface_hub
 google-genai
 anthropic
+duckduckgo_search
 pypdf
-duckduckgo-search
