@@ -27,7 +27,7 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY")
 
 # Primary High-Velocity Inference Clients
-qwen_client = InferenceClient("Qwen/Qwen2.5-7B-Instruct", token=HF_TOKEN)
+hf_client = InferenceClient(token=HF_TOKEN)
 whisper_client = InferenceClient("openai/whisper-large-v3", token=HF_TOKEN)
 tts_client = InferenceClient("microsoft/speecht5_tts", token=HF_TOKEN)
 
@@ -80,7 +80,7 @@ def clear_history(session_id):
 init_db()
 
 DEFAULT_SYSTEM_PROMPT = (
-    "You are Thunder v30.0, an elite, highly intelligent AI collaborator and engineer. "
+    "You are Thunder v30.1, an elite, highly intelligent AI collaborator and engineer. "
     "Provide clear, crisp, and insightful responses with strong technical accuracy. "
     "Format complex information into well-structured markdown with bold subheadings and bullet points. "
     "Maintain a supportive, authentic, and direct peer voice."
@@ -172,7 +172,7 @@ def query_llm(engine, messages, system_prompt, temperature, max_tokens):
             )
             return response.text, "Gemini 1.5 Flash"
         except Exception:
-            pass  # Fallback to Qwen
+            pass  # Fallback to Hugging Face Core
 
     # 2. Claude Engine Path
     if engine == "Claude 3.5 Sonnet" and claude_client:
@@ -187,19 +187,20 @@ def query_llm(engine, messages, system_prompt, temperature, max_tokens):
             )
             return response.content[0].text, "Claude 3.5 Sonnet"
         except Exception:
-            pass  # Fallback to Qwen
+            pass  # Fallback to Hugging Face Core
 
-    # 3. Native Free Hugging Face Qwen Fallback
+    # 3. Native Hugging Face Core Fallback Engine
     try:
         full_messages = [{"role": "system", "content": system_prompt}] + messages
-        response = qwen_client.chat.completions.create(
+        response = hf_client.chat.completions.create(
+            model="Qwen/Qwen2.5-7B-Instruct",
             messages=full_messages,
             max_tokens=int(max_tokens),
             temperature=float(temperature)
         )
         return response.choices[0].message.content, "Qwen 2.5 7B (HF Core)"
     except Exception as e:
-        return f"[Engine Failure: {str(e)}]", "Error"
+        return f"**System Notice:** All inference endpoints currently busy. Error details: {str(e)}", "Error"
 
 # --- CYBER MATRIX GRAPHICS & UI STYLING ---
 custom_css = """
@@ -251,7 +252,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="violet"),
     with gr.Column(elem_classes=["header-box"]):
         with gr.Row():
             with gr.Column(scale=8):
-                gr.Markdown("<h1 class='header-title'>⚡ THUNDER WORKSPACE v30.0</h1>")
+                gr.Markdown("<h1 class='header-title'>⚡ THUNDER WORKSPACE v30.1</h1>")
                 gr.Markdown("<p style='color: #94a3b8; margin: 0;'>Hyper-Engine AI Workspace • Adaptive Multi-Model Core with Persistent Memory</p>")
             with gr.Column(scale=4, min_width=220):
                 engine_select = gr.Dropdown(
@@ -321,7 +322,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="violet"),
             else:
                 return "", history, history
         
-        updated_history = history + [
+        updated_history = list(history) + [
             {"role": "user", "content": message},
             {"role": "assistant", "content": ""}
         ]
@@ -329,7 +330,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="violet"),
         return "", updated_history, updated_history
 
     def bot_reply(history, sys_prompt, temp, tokens, f_context, research_on, engine_choice, sid):
-        if not history:
+        if not history or len(history) < 2:
             yield history, history, "Engine: Standby"
             return
 
