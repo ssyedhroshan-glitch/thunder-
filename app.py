@@ -8,17 +8,21 @@ import gradio as gr
 from huggingface_hub import InferenceClient
 
 # Optional API integrations with safe import wrappers
+HAS_GENAI = False
+types = None
 try:
     from google import genai
-    from google.genai import types
+    from google.genai import types as genai_types
+    types = genai_types
     HAS_GENAI = True
-except ImportError:
+except Exception:
     HAS_GENAI = False
 
+HAS_ANTHROPIC = False
 try:
     from anthropic import Anthropic
     HAS_ANTHROPIC = True
-except ImportError:
+except Exception:
     HAS_ANTHROPIC = False
 
 # Retrieve API tokens safely
@@ -27,7 +31,7 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY")
 
 # Primary High-Velocity Inference Clients
-hf_client = InferenceClient(token=HF_TOKEN)
+hf_client = InferenceClient(token=HF_TOKEN) if HF_TOKEN else InferenceClient()
 whisper_client = InferenceClient("openai/whisper-large-v3", token=HF_TOKEN)
 tts_client = InferenceClient("microsoft/speecht5_tts", token=HF_TOKEN)
 
@@ -152,7 +156,7 @@ def choose_model(message, forced_engine):
     return "Qwen 2.5 7B"
 
 def query_llm(engine, messages, system_prompt, temperature, max_tokens):
-    if engine == "Gemini 1.5 Flash" and gemini_client:
+    if engine == "Gemini 1.5 Flash" and gemini_client and types:
         try:
             contents = []
             for m in messages:
@@ -207,7 +211,7 @@ with gr.Blocks() as demo:
     with gr.Column():
         with gr.Row():
             with gr.Column(scale=8):
-                gr.Markdown(" # ⚡ THUNDER WORKSPACE v30.2")
+                gr.Markdown("# ⚡ THUNDER WORKSPACE v30.2")
                 gr.Markdown("Adaptive Multi-Model Core with Persistent Memory")
             with gr.Column(scale=4, min_width=220):
                 engine_select = gr.Dropdown(
@@ -236,7 +240,6 @@ with gr.Blocks() as demo:
             engine_status = gr.Markdown("<small>Engine: Standby</small>")
 
         with gr.Column(scale=7):
-            # Clean chatbot initialization (No type parameter)
             chatbot = gr.Chatbot(height=540, show_copy_button=True)
             
             with gr.Row():
@@ -332,8 +335,8 @@ with gr.Blocks() as demo:
     clear_btn.click(do_clear, [session_id], [chatbot, chat_state, engine_status])
 
 port_number = int(os.environ.get("PORT", 10000))
-demo.queue(default_concurrency_limit=8).launch(
+demo.launch(
     server_name="0.0.0.0", 
     server_port=port_number
-        )
-                      
+)
+        
