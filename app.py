@@ -21,12 +21,12 @@ try:
 except ImportError:
     HAS_ANTHROPIC = False
 
-# Securely retrieve API tokens
+# Retrieve API tokens safely
 HF_TOKEN = os.environ.get("HF_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY")
 
-# Primary Inference Clients
+# Primary High-Velocity Inference Clients
 hf_client = InferenceClient(token=HF_TOKEN)
 whisper_client = InferenceClient("openai/whisper-large-v3", token=HF_TOKEN)
 tts_client = InferenceClient("microsoft/speecht5_tts", token=HF_TOKEN)
@@ -138,7 +138,7 @@ def web_search(query, max_results=3):
     except Exception as e:
         return f"[Search Error: {e}]"
 
-# --- ENGINE ROUTING ---
+# --- INFERENCE ROUTING ---
 def choose_model(message, forced_engine):
     if forced_engine != "Auto-Route":
         return forced_engine
@@ -198,41 +198,17 @@ def query_llm(engine, messages, system_prompt, temperature, max_tokens):
     except Exception as e:
         return f"**System Notice:** Endpoint busy. Error: {str(e)}", "Error"
 
-# --- UI STYLING & INTERFACE ---
-custom_css = """
-footer {visibility: hidden;}
-body, .gradio-container {
-    background: #050811 !important;
-    font-family: 'Inter', system-ui, -apple-system, sans-serif !important;
-}
-.header-box {
-    background: linear-gradient(135deg, rgba(15,23,42,0.9) 0%, rgba(30,41,59,0.5) 100%);
-    border: 1px solid rgba(56, 189, 248, 0.25);
-    border-radius: 16px;
-    padding: 20px 24px;
-    margin-bottom: 14px;
-}
-.header-title {
-    background: linear-gradient(90deg, #38bdf8, #a855f7, #ec4899);
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-    font-size: 2rem;
-    font-weight: 800;
-    margin: 0;
-}
-"""
-
-with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="violet"), css=custom_css) as demo:
+# --- UI BUILD ---
+with gr.Blocks() as demo:
     session_id = gr.State(None)
     chat_state = gr.State([])
     file_context_state = gr.State("")
 
-    with gr.Column(elem_classes=["header-box"]):
+    with gr.Column():
         with gr.Row():
             with gr.Column(scale=8):
-                gr.Markdown("<h1 class='header-title'>⚡ THUNDER WORKSPACE v30.2</h1>")
-                gr.Markdown("<p style='color: #94a3b8; margin: 0;'>Adaptive Multi-Model Core with Persistent Memory</p>")
+                gr.Markdown(" # ⚡ THUNDER WORKSPACE v30.2")
+                gr.Markdown("Adaptive Multi-Model Core with Persistent Memory")
             with gr.Column(scale=4, min_width=220):
                 engine_select = gr.Dropdown(
                     choices=["Auto-Route", "Qwen 2.5 7B", "Gemini 1.5 Flash", "Claude 3.5 Sonnet"],
@@ -260,7 +236,8 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="violet"),
             engine_status = gr.Markdown("<small>Engine: Standby</small>")
 
         with gr.Column(scale=7):
-            chatbot = gr.Chatbot(height=540, type="messages", show_copy_button=True)
+            # Clean chatbot initialization (No type parameter)
+            chatbot = gr.Chatbot(height=540, show_copy_button=True)
             
             with gr.Row():
                 msg = gr.Textbox(show_label=False, placeholder="Type your message...", container=False, scale=8)
@@ -359,4 +336,4 @@ demo.queue(default_concurrency_limit=8).launch(
     server_name="0.0.0.0", 
     server_port=port_number
         )
-                                 
+                      
