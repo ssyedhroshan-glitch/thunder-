@@ -9,11 +9,11 @@ from huggingface_hub import InferenceClient
 
 # Optional API integrations with safe import wrappers
 HAS_GENAI = False
-types = None
+genai_types = None
 try:
     from google import genai
-    from google.genai import types as genai_types
-    types = genai_types
+    from google.genai import types as g_types
+    genai_types = g_types
     HAS_GENAI = True
 except Exception:
     HAS_GENAI = False
@@ -25,15 +25,14 @@ try:
 except Exception:
     HAS_ANTHROPIC = False
 
-# Retrieve API tokens safely
+# Safe API token retrieval
 HF_TOKEN = os.environ.get("HF_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY")
 
-# Primary High-Velocity Inference Clients
 hf_client = InferenceClient(token=HF_TOKEN) if HF_TOKEN else InferenceClient()
-whisper_client = InferenceClient("openai/whisper-large-v3", token=HF_TOKEN)
-tts_client = InferenceClient("microsoft/speecht5_tts", token=HF_TOKEN)
+whisper_client = InferenceClient("openai/whisper-large-v3", token=HF_TOKEN) if HF_TOKEN else None
+tts_client = InferenceClient("microsoft/speecht5_tts", token=HF_TOKEN) if HF_TOKEN else None
 
 gemini_client = genai.Client(api_key=GEMINI_API_KEY) if (HAS_GENAI and GEMINI_API_KEY) else None
 claude_client = Anthropic(api_key=CLAUDE_API_KEY) if (HAS_ANTHROPIC and CLAUDE_API_KEY) else None
@@ -41,11 +40,14 @@ claude_client = Anthropic(api_key=CLAUDE_API_KEY) if (HAS_ANTHROPIC and CLAUDE_A
 MAX_CONTEXT_TURNS = 12
 DB_PATH = "thunder_v30_memory.db"
 
-# --- SESSION MEMORY (SQLite WAL Mode with Thread Safety) ---
+# --- DATABASE SETUP WITH FALLBACK ---
 _db_lock = threading.Lock()
-_conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-_conn.execute("PRAGMA journal_mode=WAL")
-_conn.execute("PRAGMA synchronous=NORMAL")
+try:
+    _conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    _conn.execute("PRAGMA journal_mode=WAL")
+    _conn.execute("PRAGMA synchronous=NORMAL")
+except Exception:
+    _conn = sqlite3.connect(":memory:", check_same_thread=False)
 
 def init_db():
     with _db_lock:
@@ -81,17 +83,18 @@ def clear_history(session_id):
         _conn.execute("DELETE FROM history WHERE session_id = ?", (session_id,))
         _conn.commit()
 
-init_db()
+try:
+    init_db()
+except Exception as e:
+    print(f"DB Init Warning: {e}")
 
 DEFAULT_SYSTEM_PROMPT = (
     "You are Thunder v30.2, an elite, highly intelligent AI collaborator and engineer. "
-    "Provide clear, crisp, and insightful responses with strong technical accuracy. "
-    "Format complex information into well-structured markdown with bold subheadings and bullet points."
+    "Provide clear, crisp, and insightful responses with strong technical accuracy."
 )
 
-# --- UTILITIES ---
 def transcribe(audio_path):
-    if not audio_path:
+    if not audio_path or not whisper_client:
         return ""
     try:
         result = whisper_client.automatic_speech_recognition(audio_path)
@@ -100,7 +103,7 @@ def transcribe(audio_path):
         return f"[Transcription Error: {str(e)}]"
 
 def speak(text):
-    if not text:
+    if not text or not tts_client:
         return None
     try:
         clean_text = text.replace("*", "").replace("#", "").replace("`", "").replace("- ", "")[:250]
@@ -142,31 +145,24 @@ def web_search(query, max_results=3):
     except Exception as e:
         return f"[Search Error: {e}]"
 
-# --- INFERENCE ROUTING ---
 def choose_model(message, forced_engine):
     if forced_engine != "Auto-Route":
         return forced_engine
-    
     text = (message or "").lower().strip()
-    if any(k in text for k in ["code", "refactor", "bug", "write", "essay", "architecture", "design"]):
+    if any(k in text for k in ["code", "refactor", "bug", "write", "essay", "architecture"]):
         return "Claude 3.5 Sonnet" if claude_client else "Qwen 2.5 7B"
     if any(k in text for k in ["what is", "explain", "summarize", "search", "who is", "math"]):
         return "Gemini 1.5 Flash" if gemini_client else "Qwen 2.5 7B"
-    
     return "Qwen 2.5 7B"
 
 def query_llm(engine, messages, system_prompt, temperature, max_tokens):
-    if engine == "Gemini 1.5 Flash" and gemini_client and types:
+    if engine == "Gemini 1.5 Flash" and gemini_client and genai_types:
         try:
-            contents = []
-            for m in messages:
-                role = "user" if m["role"] == "user" else "model"
-                contents.append({"role": role, "parts": [m["content"]]})
-            
+            contents = [{"role": "user" if m["role"] == "user" else "model", "parts": [m["content"]]} for m in messages]
             response = gemini_client.models.generate_content(
                 model="gemini-1.5-flash",
                 contents=contents,
-                config=types.GenerateContentConfig(
+                config=genai_types.GenerateContentConfig(
                     system_instruction=system_prompt,
                     temperature=float(temperature),
                     max_output_tokens=int(max_tokens),
@@ -200,9 +196,8 @@ def query_llm(engine, messages, system_prompt, temperature, max_tokens):
         )
         return response.choices[0].message.content, "Qwen 2.5 7B (HF Core)"
     except Exception as e:
-        return f"**System Notice:** Endpoint busy. Error: {str(e)}", "Error"
+        return f"**System Notice:** Inference error: {str(e)}", "Error"
 
-# --- UI BUILD ---
 with gr.Blocks() as demo:
     session_id = gr.State(None)
     chat_state = gr.State([])
@@ -217,8 +212,7 @@ with gr.Blocks() as demo:
                 engine_select = gr.Dropdown(
                     choices=["Auto-Route", "Qwen 2.5 7B", "Gemini 1.5 Flash", "Claude 3.5 Sonnet"],
                     value="Auto-Route",
-                    label="🧠 Active Model Pipeline",
-                    container=True
+                    label="🧠 Active Model Pipeline"
                 )
 
     with gr.Row():
@@ -240,10 +234,9 @@ with gr.Blocks() as demo:
             engine_status = gr.Markdown("<small>Engine: Standby</small>")
 
         with gr.Column(scale=7):
-            chatbot = gr.Chatbot(height=540, show_copy_button=True)
-            
+            chatbot = gr.Chatbot(height=540, type="messages")
             with gr.Row():
-                msg = gr.Textbox(show_label=False, placeholder="Type your message...", container=False, scale=8)
+                msg = gr.Textbox(show_label=False, placeholder="Type your message...", scale=8)
                 send_btn = gr.Button("⚡ Send", variant="primary", scale=2)
 
     reply_audio = gr.Audio(autoplay=True, visible=False)
@@ -335,8 +328,5 @@ with gr.Blocks() as demo:
     clear_btn.click(do_clear, [session_id], [chatbot, chat_state, engine_status])
 
 port_number = int(os.environ.get("PORT", 10000))
-demo.launch(
-    server_name="0.0.0.0", 
-    server_port=port_number
-)
-        
+demo.launch(server_name="0.0.0.0", server_port=port_number)
+                           
