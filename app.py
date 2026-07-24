@@ -172,7 +172,7 @@ def query_llm(engine, messages, system_prompt, temperature, max_tokens):
             )
             return response.text, "Gemini 1.5 Flash"
         except Exception:
-            pass  # Fallback to Hugging Face Core
+            pass
 
     # 2. Claude Engine Path
     if engine == "Claude 3.5 Sonnet" and claude_client:
@@ -187,7 +187,7 @@ def query_llm(engine, messages, system_prompt, temperature, max_tokens):
             )
             return response.content[0].text, "Claude 3.5 Sonnet"
         except Exception:
-            pass  # Fallback to Hugging Face Core
+            pass
 
     # 3. Native Hugging Face Core Fallback Engine
     try:
@@ -243,7 +243,7 @@ body, .gradio-container {
 }
 """
 
-with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="violet"), css=custom_css) as demo:
+with gr.Blocks() as demo:
     session_id = gr.State(None)
     chat_state = gr.State([])
     file_context_state = gr.State("")
@@ -252,7 +252,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="violet"),
     with gr.Column(elem_classes=["header-box"]):
         with gr.Row():
             with gr.Column(scale=8):
-                gr.Markdown("<h1 class='header-title'>⚡ THUNDER WORKSPACE v30.1</h1>")
+                gr.Markdown("<h1 class='header-title'>⚡ THUNDER WORKSPACE v30.2</h1>")
                 gr.Markdown("<p style='color: #94a3b8; margin: 0;'>Hyper-Engine AI Workspace • Adaptive Multi-Model Core with Persistent Memory</p>")
             with gr.Column(scale=4, min_width=220):
                 engine_select = gr.Dropdown(
@@ -287,7 +287,6 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="violet"),
             chatbot = gr.Chatbot(
                 height=540,
                 elem_classes=["chatbot-container"],
-                type="messages",
                 show_copy_button=True
             )
             
@@ -397,4 +396,10 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="violet"),
     clear_btn.click(do_clear, [session_id], [chatbot, chat_state, engine_status])
 
 port_number = int(os.environ.get("PORT", 10000))
-demo.queue(default_concurrency_limit=8).launch(server_name="0.0.0.0", server_port=port_number)
+theme_obj = gr.themes.Soft(primary_hue="cyan", secondary_hue="violet")
+demo.queue(default_concurrency_limit=8).launch(
+    server_name="0.0.0.0", 
+    server_port=port_number,
+    theme=theme_obj,
+    css=custom_css
+        )
