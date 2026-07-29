@@ -328,5 +328,9 @@ with gr.Blocks() as demo:
     clear_btn.click(do_clear, [session_id], [chatbot, chat_state, engine_status])
 
 port_number = int(os.environ.get("PORT", 10000))
-demo.launch(server_name="0.0.0.0", server_port=port_number)
-                           
+demo.launch(
+    server_name="0.0.0.0",
+    server_port=port_number,
+    share=False,
+    api_open=False
+)
