@@ -1,4 +1,5 @@
 gradio==4.44.1
+pydantic==2.10.6
 huggingface_hub
 google-genai
 anthropic
