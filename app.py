@@ -1,13 +1,12 @@
 import os
+import sys
 import uuid
 import tempfile
 import sqlite3
+import io
+import contextlib
 
-# --- PATCH: Fix Gradio's internal "TypeError: argument of type 'bool' is not iterable" bug ---
-# This happens because some Gradio/Pydantic version combinations produce a JSON schema where
-# a boolean (True/False) appears where a dict is expected. Gradio's own schema parser doesn't
-# handle that case, and it crashes on launch before your app ever starts. This patch makes the
-# parser treat a boolean schema as a generic type instead of crashing.
+# --- GRADIO SCHEMA BUG PATCH ---
 import gradio_client.utils as _gc_utils
 
 _original_get_type = _gc_utils.get_type
@@ -30,14 +29,14 @@ from huggingface_hub import InferenceClient
 
 hf_token = os.environ.get("HF_TOKEN")
 
-# High-Velocity Inference Clients
-client = InferenceClient(model="Qwen/Qwen2.5-7B-Instruct", token=hf_token)
+# Core Inference Clients
+qwen_client = InferenceClient(model="Qwen/Qwen2.5-7B-Instruct", token=hf_token)
 whisper_client = InferenceClient(model="openai/whisper-large-v3", token=hf_token)
 tts_client = InferenceClient(model="microsoft/speecht5_tts", token=hf_token)
 
 DB_PATH = "thunder_memory.db"
 
-# --- CORE PERSISTENT MULTI-SESSION SQL DATABASE ENGINE ---
+# --- PERSISTENT SQL DATABASE ENGINE ---
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     conn.execute("""
@@ -80,25 +79,6 @@ def create_new_session(name="New Workspace"):
     conn.close()
     return new_id
 
-def rename_session_in_db(session_id, new_name):
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("UPDATE sessions SET name = ? WHERE id = ?", (new_name, session_id))
-    conn.commit()
-    conn.close()
-
-def delete_session_from_db(session_id):
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
-    conn.execute("DELETE FROM history WHERE session_id = ?", (session_id,))
-
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM sessions")
-    if cursor.fetchone()[0] == 0:
-        default_id = str(uuid.uuid4())
-        cursor.execute("INSERT INTO sessions (id, name) VALUES (?, ?)", (default_id, "Default Workspace"))
-    conn.commit()
-    conn.close()
-
 def save_message(session_id, role, content):
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
@@ -121,34 +101,38 @@ def load_history(session_id):
         (session_id,)
     ).fetchall()
     conn.close()
-
-    chat_list = []
-    for role, content in rows:
-        chat_list.append({"role": role, "content": content})
-    return chat_list
+    return [{"role": role, "content": content} for role, content in rows]
 
 init_db()
 
 DEFAULT_SYSTEM_PROMPT = (
-    "You are Thunder, an elite, tech-savvy AI collaborator with a sharp mind and a touch of dry wit. "
-    "You talk to the user as a brilliant, supportive peer and co-founder. "
-    "Provide highly insightful, direct, and scannable answers using short headings and clean bullet points. "
-    "Keep your tone authentic, grounded, and engaging. Never use robotic disclaimers."
+    "You are Thunder AI, an elite, high-velocity co-founder and AI collaborator. "
+    "You provide hyper-accurate, structured, and witty responses using crisp headings and bullet points."
 )
 
-# --- BACKEND MULTIMEDIA WORKFLOW PIPELINES ---
-def transcribe(audio_path):
-    if not audio_path:
-        return ""
+# --- ADVANCED TOOLS & EXECUTION ---
+def run_python_interpreter(code_str):
+    """Executes Python code in a sandboxed capture environment."""
+    output_buffer = io.StringIO()
     try:
-        result = whisper_client.automatic_speech_recognition(audio_path)
-        return result.text if hasattr(result, "text") else str(result)
+        with contextlib.redirect_stdout(output_buffer), contextlib.redirect_stderr(output_buffer):
+            exec_globals = {"__builtins__": __builtins__}
+            exec(code_str, exec_globals)
+        res = output_buffer.getvalue()
+        return res if res.strip() else "[Code Executed Successfully - No Stdout Output]"
+    except Exception as e:
+        return f"Python Execution Error: {e}"
+
+def transcribe(audio_path):
+    if not audio_path: return ""
+    try:
+        res = whisper_client.automatic_speech_recognition(audio_path)
+        return res.text if hasattr(res, "text") else str(res)
     except Exception as e:
         return f"[Transcription Error: {e}]"
 
 def speak(text, enabled=True):
-    if not text or not enabled:
-        return None
+    if not text or not enabled: return None
     try:
         clean_text = text.replace("*", "").replace("#", "").replace("`", "")[:200]
         audio_bytes = tts_client.text_to_speech(clean_text)
@@ -160,8 +144,7 @@ def speak(text, enabled=True):
         return None
 
 def read_file(file_obj):
-    if file_obj is None:
-        return ""
+    if file_obj is None: return ""
     try:
         file_path = file_obj.name if hasattr(file_obj, "name") else file_obj
         ext = os.path.splitext(file_path)[1].lower()
@@ -169,58 +152,83 @@ def read_file(file_obj):
             from pypdf import PdfReader
             reader = PdfReader(file_path)
             text = "\n".join((page.extract_text() or "") for i, page in enumerate(reader.pages) if i < 15)
-        elif ext in (".txt", ".md", ".csv", ".py", ".json", ".js", ".ts"):
+        else:
             with open(file_path, "r", errors="ignore", encoding="utf-8") as f:
                 text = f.read(15000)
-        else:
-            return f"[Attached Asset File: {os.path.basename(file_path)}]"
         return text[:12000]
     except Exception as e:
-        return f"[Parsing Error: {e}]"
+        return f"[File Parsing Error: {e}]"
 
 def web_search(query, max_results=3):
     try:
         from duckduckgo_search import DDGS
         with DDGS() as ddgs:
             results = list(ddgs.text(query, max_results=max_results))
-        if not results:
-            return ""
+        if not results: return ""
         return "\n".join(f"- {r.get('title','')}: {r.get('body','')} ({r.get('href', '')})" for r in results[:max_results])
     except Exception as e:
-        return f"[Deep Research Error: {e}]"
+        return f"[Research Error: {e}]"
 
-def build_messages(chat_history, system_prompt, file_context, search_context):
-    messages = [{"role": "system", "content": system_prompt}]
-    if search_context:
-        messages.append({"role": "system", "content": "Deep Research Results:\n\n" + search_context})
-    if file_context:
-        messages.append({"role": "system", "content": "Attached Document Reference:\n\n" + file_context})
+# --- MULTI-MODEL ENGINE ROUTER ---
+def stream_model_response(model_choice, messages, temp, tokens):
+    # Engine 1: Gemini 1.5 Flash
+    if model_choice == "Gemini 1.5 Flash":
+        gemini_key = os.environ.get("GEMINI_API_KEY")
+        if not gemini_key:
+            yield "⚠️ **Gemini Error:** `GEMINI_API_KEY` is missing from Render environment variables."
+            return
+        try:
+            from google import genai
+            client = genai.Client(api_key=gemini_key)
+            
+            system_instr = messages[0]["content"] if messages and messages[0]["role"] == "system" else ""
+            contents = []
+            for msg in messages:
+                if msg["role"] == "user":
+                    contents.append({"role": "user", "parts": [{"text": msg["content"]}]})
+                elif msg["role"] == "assistant":
+                    contents.append({"role": "model", "parts": [{"text": msg["content"]}]})
 
-    recent_history = chat_history[-10:] if len(chat_history) > 10 else chat_history
+            response = client.models.generate_content(
+                model="gemini-1.5-flash",
+                contents=contents,
+                config={
+                    "system_instruction": system_instr,
+                    "temperature": float(temp),
+                    "max_output_tokens": int(tokens)
+                }
+            )
+            yield response.text or "[Empty Response]"
+            return
+        except Exception as e:
+            yield f"⚠️ **Gemini API Error:** {e}"
+            return
 
-    for msg in recent_history:
-        if isinstance(msg, dict):
-            messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
-        elif isinstance(msg, (list, tuple)) and len(msg) >= 2:
-            if msg[0]: messages.append({"role": "user", "content": msg[0]})
-            if msg[1]: messages.append({"role": "assistant", "content": msg[1]})
-    return messages
+    # Engine 2: DeepSeek R1 Reasoning (via HF)
+    elif model_choice == "DeepSeek R1 (Reasoning)":
+        try:
+            deepseek_client = InferenceClient(model="deepseek-ai/DeepSeek-R1-Distill-Qwen-32B", token=hf_token)
+            full_res = ""
+            for token in deepseek_client.chat_completion(messages, max_tokens=int(tokens), temperature=float(temp), stream=True):
+                chunk = token.choices[0].delta.content
+                if chunk:
+                    full_res += chunk
+                    yield full_res
+            return
+        except Exception as e:
+            yield f"⚠️ **DeepSeek R1 Error:** {e}"
+            return
 
-def stream_reply(messages, temperature, max_tokens):
-    """Uses the classic chat_completion() call for broad huggingface_hub version compatibility."""
-    text = ""
-    for token in client.chat_completion(
-        messages,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        stream=True
-    ):
-        token_text = token.choices[0].delta.content
-        if token_text:
-            text += token_text
-            yield text
+    # Default Engine: Qwen 2.5 7B
+    else:
+        full_res = ""
+        for token in qwen_client.chat_completion(messages, max_tokens=int(tokens), temperature=float(temp), stream=True):
+            chunk = token.choices[0].delta.content
+            if chunk:
+                full_res += chunk
+                yield full_res
 
-# --- PREMIUM CYBERPUNK THEME DESIGN MATRIX ---
+# --- CUSTOM THEME MATRIX ---
 custom_css = """
 footer {visibility: hidden;}
 body, .gradio-container {background-color: #0b0f19 !important;}
@@ -229,235 +237,128 @@ body, .gradio-container {background-color: #0b0f19 !important;}
     border: 1px solid #1f293d !important;
     border-radius: 12px !important;
     padding: 14px !important;
-    margin-bottom: 10px !important;
 }
 .chatbot-container {
     border: 1px solid #1f293d !important;
     border-radius: 12px !important;
 }
-.header-row {
-    align-items: center !important;
-    margin-bottom: 10px;
-}
-.flex-end-layout {
-    display: flex !important;
-    justify-content: flex-end !important;
-    gap: 10px !important;
-    align-items: center !important;
-}
-.console-row {
-    display: flex !important;
-    flex-direction: row !important;
-    align-items: center !important;
-    gap: 8px !important;
-    width: 100% !important;
-}
-.msg-container {
-    flex-grow: 1 !important;
-}
 """
 
-with gr.Blocks(
-    theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"),
-    css=custom_css,
-    js="() => { document.querySelector('body').classList.add('dark'); }"
-) as demo:
+# --- INTERFACE BUILD ---
+with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), css=custom_css) as demo:
 
     session_id = gr.State(None)
     chat_state = gr.State([])
     file_context_state = gr.State("")
-    features_visible = gr.State(False)
 
-    with gr.Row(elem_classes=["header-row"]):
-        with gr.Column(scale=3):
-            settings_toggle = gr.Checkbox(label="⚙️ Settings Option", value=False, container=False)
-        with gr.Column(scale=4):
-            gr.Markdown("<center><h2 style='margin:0; padding:0; color:#22d3ee;'>⚡ THUNDER WORKSPACE</h2></center>")
-        with gr.Column(scale=5, elem_classes=["flex-end-layout"]):
-            theme_choice = gr.Radio(["Dark Matrix", "Light Slate"], value="Dark Matrix", show_label=False, container=False)
-            session_selector = gr.Dropdown(choices=[], label="Workspace Session", interactive=True, container=False)
-            new_session_btn = gr.Button("➕ Session", size="sm", variant="secondary")
-            clear_btn = gr.Button("🆕 Reset", variant="stop", size="sm")
+    gr.Markdown("<center><h2 style='color:#22d3ee; margin-bottom:5px;'>⚡ THUNDER ADVANCED AI PLATFORM</h2></center>")
 
-    with gr.Group(visible=False, elem_classes=["panel-card"]) as settings_panel:
-        with gr.Row():
-            with gr.Column(scale=6):
-                system_prompt = gr.Textbox(value=DEFAULT_SYSTEM_PROMPT, label="Prompt Core Constraints", lines=2)
-            with gr.Column(scale=3):
-                temperature = gr.Slider(0.1, 1.5, value=0.70, step=0.05, label="Temperature Matrix")
-                max_tokens = gr.Slider(256, 4096, value=1536, step=128, label="Token Window")
-            with gr.Column(scale=3):
-                autoplay_audio = gr.Checkbox(label="🔊 Voice AutoPlay", value=True)
-                session_rename_box = gr.Textbox(placeholder="Rename active workspace...", show_label=False)
-                rename_session_btn = gr.Button("Rename Workspace", size="sm")
-
-    # NOTE: type="messages" added to match the dict-based {"role","content"} history format
-    chatbot = gr.Chatbot(height=480, elem_classes=["chatbot-container"], type="messages")
-
-    with gr.Group(visible=False, elem_classes=["panel-card"]) as features_vault:
-        gr.Markdown("🌟 **Additional Features Suite**")
-        with gr.Row():
-            with gr.Column(scale=2, min_width=120):
-                file_input = gr.File(label="📎 Add File", file_count="single", file_types=[".txt", ".pdf", ".md", ".py", ".json", ".csv"])
-            with gr.Column(scale=2, min_width=120):
-                audio_input = gr.Audio(sources=["microphone"], type="filepath", label="🎤 Mic")
-            with gr.Column(scale=2, min_width=120):
-                research_toggle = gr.Checkbox(label="🔍 Deep Research", value=False)
-            with gr.Column(scale=2, min_width=120):
-                camera_input = gr.Image(sources=["webcam"], type="filepath", label="📷 Camera")
-            with gr.Column(scale=2, min_width=120):
-                canvas_input = gr.Image(sources=["upload"], type="filepath", label="🎨 Image Editing")
-
-    with gr.Row(elem_classes=["console-row"]):
-        features_btn = gr.Button("➕", variant="secondary", size="sm", min_width=50)
-        with gr.Column(elem_classes=["msg-container"]):
-            msg = gr.Textbox(
-                show_label=False,
-                placeholder="Message Thunder or expand options panel using '+'...",
-                container=False
+    with gr.Row():
+        # LEFT COLUMN: Controls & Multi-Model Engine
+        with gr.Column(scale=4, elem_classes=["panel-card"]):
+            session_selector = gr.Dropdown(choices=[], label="Workspace Session", interactive=True)
+            new_session_btn = gr.Button("➕ New Workspace", size="sm")
+            
+            model_choice = gr.Dropdown(
+                choices=["Qwen 2.5 7B (Default)", "Gemini 1.5 Flash", "DeepSeek R1 (Reasoning)"],
+                value="Qwen 2.5 7B (Default)",
+                label="Select AI Model Engine"
             )
-        send_btn = gr.Button("⚡", variant="primary", size="sm", min_width=50)
+            system_prompt = gr.Textbox(value=DEFAULT_SYSTEM_PROMPT, label="System Instructions", lines=2)
+            
+            with gr.Row():
+                temperature = gr.Slider(0.1, 1.5, value=0.70, step=0.05, label="Temperature")
+                max_tokens = gr.Slider(256, 4096, value=1536, step=128, label="Max Tokens")
 
-    reply_audio = gr.Audio(autoplay=True, visible=False)
+            file_input = gr.File(label="Attach File / Document", file_count="single")
+            audio_input = gr.Audio(sources=["microphone"], type="filepath", label="Voice Input")
+            research_toggle = gr.Checkbox(label="🔍 Deep Web Research Agent", value=False)
+            clear_btn = gr.Button("Reset Chat", variant="stop")
 
+        # CENTER COLUMN: Primary Chat Engine
+        with gr.Column(scale=8):
+            chatbot = gr.Chatbot(height=520, elem_classes=["chatbot-container"], type="messages")
+            with gr.Row():
+                msg = gr.Textbox(placeholder="Message Thunder AI...", show_label=False, container=False, scale=9)
+                send_btn = gr.Button("⚡", variant="primary", scale=1)
+            reply_audio = gr.Audio(autoplay=True, visible=False)
+
+        # RIGHT COLUMN: Interactive Artifacts & Code Interpreter Workbench
+        with gr.Column(scale=6, elem_classes=["panel-card"]):
+            gr.Markdown("### 🛠️ Interactive Artifacts & Execution")
+            artifact_code = gr.Code(label="Python Code Sandbox", language="python", lines=12)
+            exec_btn = gr.Button("▶️ Execute Code", variant="primary", size="sm")
+            exec_output = gr.Textbox(label="Execution Output", lines=6, interactive=False)
+
+    # --- EVENT BINDINGS & LOGIC ---
     def start_session():
         init_db()
         sessions = get_all_sessions()
-        active_id = sessions[0][0] if sessions else ""
-        initial_history = load_history(active_id)
-
-        session_choices = [(name, sid) for sid, name in sessions]
-        return active_id, initial_history, initial_history, gr.update(choices=session_choices, value=active_id)
+        active_id = sessions[0][0] if sessions else create_new_session()
+        hist = load_history(active_id)
+        choices = [(name, sid) for sid, name in sessions]
+        return active_id, hist, hist, gr.update(choices=choices, value=active_id)
 
     demo.load(start_session, None, [session_id, chatbot, chat_state, session_selector])
 
-    settings_toggle.change(lambda visible: gr.update(visible=visible), inputs=[settings_toggle], outputs=[settings_panel])
+    def switch_session(target_id):
+        if not target_id: return gr.update(), [], []
+        hist = load_history(target_id)
+        return target_id, hist, hist
 
-    def toggle_vault(current_state):
-        return not current_state, gr.update(visible=not current_state)
-    features_btn.click(toggle_vault, [features_visible], [features_visible, features_vault])
+    session_selector.change(switch_session, inputs=[session_selector], outputs=[session_id, chatbot, chat_state])
 
-    def switch_active_session(target_id):
-        if not target_id:
-            return gr.update(), [], []
-        new_history = load_history(target_id)
-        return target_id, new_history, new_history
-
-    session_selector.change(switch_active_session, inputs=[session_selector], outputs=[session_id, chatbot, chat_state])
-
-    def create_and_refresh_session():
-        new_id = create_new_session("Workspace Session")
+    def handle_new_session():
+        new_id = create_new_session("New Workspace")
         sessions = get_all_sessions()
-        session_choices = [(name, sid) for sid, name in sessions]
-        new_history = load_history(new_id)
-        return new_id, new_history, new_history, gr.update(choices=session_choices, value=new_id)
+        choices = [(name, sid) for sid, name in sessions]
+        return new_id, [], [], gr.update(choices=choices, value=new_id)
 
-    new_session_btn.click(create_and_refresh_session, None, [session_id, chatbot, chat_state, session_selector])
+    new_session_btn.click(handle_new_session, None, [session_id, chatbot, chat_state, session_selector])
 
-    def rename_active_workspace(active_id, new_name):
-        if not active_id or not new_name.strip():
-            return gr.update()
-        rename_session_in_db(active_id, new_name.strip())
-        sessions = get_all_sessions()
-        session_choices = [(name, sid) for sid, name in sessions]
-        return gr.update(choices=session_choices, value=active_id)
+    audio_input.change(lambda path: transcribe(path) if path else "", inputs=[audio_input], outputs=[msg])
+    file_input.change(lambda file_obj: read_file(file_obj), inputs=[file_input], outputs=[file_context_state])
 
-    rename_session_btn.click(rename_active_workspace, [session_id, session_rename_box], [session_selector])
-
-    theme_js = """
-    (mode) => {
-        const body = document.querySelector('body');
-        if(mode === 'Light Slate') {
-            body.style.backgroundColor = '#f7fafc';
-            body.classList.remove('dark');
-        } else {
-            body.style.backgroundColor = '#0b0f19';
-            body.classList.add('dark');
-        }
-    }
-    """
-    theme_choice.change(None, inputs=[theme_choice], js=theme_js)
-
-    def on_audio(audio_path):
-        if not audio_path: return gr.update()
-        return transcribe(audio_path)
-    audio_input.change(on_audio, inputs=[audio_input], outputs=[msg])
-
-    def on_file(file_obj):
-        return read_file(file_obj)
-    file_input.change(on_file, inputs=[file_input], outputs=[file_context_state])
-
-    def user_send(message, f_context, cam, sketch, history, sid):
-        message = (message or "").strip()
-        if not message:
-            if f_context: message = "⚡ [File payload analyzed]"
-            elif cam: message = "📷 [Camera stream frame captured]"
-            elif sketch: message = "🎨 [Canvas frame updated]"
-        if not message: return "", history, history
-
-        new_history = history + [{"role": "user", "content": message}]
+    def user_send(message, history, sid):
+        if not message.strip(): return "", history, history
+        new_hist = history + [{"role": "user", "content": message}]
         save_message(sid, "user", message)
-        return "", new_history, new_history
+        return "", new_hist, new_hist
 
-    def bot_reply(history, sys_prompt, temp, tokens, f_context, research_on, sid):
-        if not history: return history, history
+    def bot_reply(history, sys_prompt, model_sel, temp, tokens, f_context, research_on, sid):
+        if not history: yield history, history; return
 
         last_user = history[-1]["content"]
-
         search_context = web_search(last_user) if research_on else ""
-        messages = build_messages(history[:-1], sys_prompt, f_context, search_context)
-        messages.append({"role": "user", "content": last_user})
+
+        messages = [{"role": "system", "content": sys_prompt}]
+        if search_context: messages.append({"role": "system", "content": f"Web Research:\n{search_context}"})
+        if f_context: messages.append({"role": "system", "content": f"Document Context:\n{f_context}"})
+
+        for msg_item in history:
+            messages.append({"role": msg_item["role"], "content": msg_item["content"]})
 
         history = history + [{"role": "assistant", "content": ""}]
 
-        final_text = ""
-        try:
-            for partial in stream_reply(messages, temp, tokens):
-                final_text = partial
-                history[-1]["content"] = final_text
-                yield history, history
-            save_message(sid, "assistant", final_text)
-        except Exception as e:
-            err = f"Engine Error: {e}"
-            history[-1]["content"] = err
-            save_message(sid, "assistant", err)
+        full_text = ""
+        for chunk in stream_model_response(model_sel, messages, temp, tokens):
+            full_text = chunk
+            history[-1]["content"] = full_text
             yield history, history
 
-    def bot_speak(history, audio_enabled):
-        if not history or not audio_enabled: return None
-        text = history[-1]["content"]
-        if text: return speak(text, audio_enabled)
-        return None
+        save_message(sid, "assistant", full_text)
 
-    def reset_media_slots():
-        return None, None, None, ""
-
-    def do_clear(sid):
-        clear_session_history(sid)
-        return [], [], ""
-
-    msg.submit(
-        user_send, [msg, file_context_state, camera_input, canvas_input, chat_state, session_id], [msg, chatbot, chat_state]
-    ).then(
-        bot_reply, [chat_state, system_prompt, temperature, max_tokens, file_context_state, research_toggle, session_id], [chatbot, chat_state]
-    ).then(
-        bot_speak, [chat_state, autoplay_audio], [reply_audio]
-    ).then(
-        reset_media_slots, None, [file_input, camera_input, canvas_input, file_context_state]
+    msg.submit(user_send, [msg, chat_state, session_id], [msg, chatbot, chat_state]).then(
+        bot_reply, [chat_state, system_prompt, model_choice, temperature, max_tokens, file_context_state, research_toggle, session_id], [chatbot, chat_state]
     )
 
-    send_btn.click(
-        user_send, [msg, file_context_state, camera_input, canvas_input, chat_state, session_id], [msg, chatbot, chat_state]
-    ).then(
-        bot_reply, [chat_state, system_prompt, temperature, max_tokens, file_context_state, research_toggle, session_id], [chatbot, chat_state]
-    ).then(
-        bot_speak, [chat_state, autoplay_audio], [reply_audio]
-    ).then(
-        reset_media_slots, None, [file_input, camera_input, canvas_input, file_context_state]
+    send_btn.click(user_send, [msg, chat_state, session_id], [msg, chatbot, chat_state]).then(
+        bot_reply, [chat_state, system_prompt, model_choice, temperature, max_tokens, file_context_state, research_toggle, session_id], [chatbot, chat_state]
     )
 
-    clear_btn.click(do_clear, [session_id], [chatbot, chat_state, file_context_state])
+    exec_btn.click(run_python_interpreter, inputs=[artifact_code], outputs=[exec_output])
+    clear_btn.click(lambda sid: (clear_session_history(sid), [], [])[1:], inputs=[session_id], outputs=[chatbot, chat_state])
 
 port_number = int(os.environ.get("PORT", 10000))
 demo.queue(default_concurrency_limit=4).launch(server_name="0.0.0.0", server_port=port_number)
-                                        
+            
