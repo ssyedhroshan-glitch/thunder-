@@ -5,3 +5,4 @@ duckduckgo_search>=6.0.0
 google-genai
 requests
 openai
+pillow
