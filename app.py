@@ -370,13 +370,13 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="blue", neutral_hue="slate"), cs
 
     clear_btn.click(do_clear, [session_id], [chatbot, chat_state, engine_status])
 
-# --- CRITICAL RENDER LAUNCH CONFIGURATION ---
+# --- RENDER LAUNCH CONFIGURATION ---
 port_number = int(os.environ.get("PORT", 10000))
-demo.launch(
-    server_name="0.0.0.0", 
-    server_port=port_number,
-    share=False,
-    api_open=False,
-    show_api=False
-            )
-        
+
+if __name__ == "__main__":
+    demo.launch(
+        server_name="0.0.0.0", 
+        server_port=port_number,
+        allowed_paths=["*"]
+    )
+    
