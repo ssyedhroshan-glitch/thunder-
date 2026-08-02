@@ -2,20 +2,7 @@ import os
 import gradio as gr
 from huggingface_hub import InferenceClient
 
-# Safe optional import for Google GenAI
-HAS_GEMINI = False
-genai_client = None
-
-try:
-    from google import genai
-    gemini_key = os.environ.get("GEMINI_API_KEY")
-    if gemini_key:
-        genai_client = genai.Client(api_key=gemini_key)
-        HAS_GEMINI = True
-except Exception:
-    HAS_GEMINI = False
-
-# HuggingFace Client
+# HuggingFace Client (Primary)
 HF_TOKEN = os.environ.get("HF_TOKEN")
 hf_client = InferenceClient("Qwen/Qwen2.5-7B-Instruct", token=HF_TOKEN)
 
@@ -29,32 +16,34 @@ def extract_text_from_pdf(file_obj):
         reader = PdfReader(file_path)
         extracted = []
         for i, page in enumerate(reader.pages):
-            if i >= 15:  # Read up to first 15 pages
+            if i >= 15:
                 break
             text = page.extract_text()
             if text:
                 extracted.append(text)
-        return "\n".join(extracted)[:10000] # Limit length
+        return "\n".join(extracted)[:10000]
     except Exception as e:
         return f"[PDF Extraction Error: {str(e)}]"
 
-# --- CHAT ENGINE ROUTER ---
+# --- CHAT ROUTER ---
 def respond(message, history, system_prompt, model_choice, pdf_file, max_tokens, temperature):
-    # Extract PDF context if uploaded
     pdf_text = extract_text_from_pdf(pdf_file)
     
-    # Construct System Prompt with PDF Context
     full_system_prompt = system_prompt
     if pdf_text:
-        full_system_prompt += f"\n\n<pdf_context>\n{pdf_text}\n</pdf_context>\nAnswer the user's queries using the document provided above when relevant."
+        full_system_prompt += f"\n\n<pdf_context>\n{pdf_text}\n</pdf_context>\nAnswer user queries using the document provided above when relevant."
 
-    # Gemini Engine Execution
+    # Gemini Processing
     if model_choice == "Gemini 1.5 Flash":
-        if not HAS_GEMINI or not genai_client:
-            yield "⚠️ **Gemini Error:** `GEMINI_API_KEY` environment variable is not configured on Render."
+        gemini_key = os.environ.get("GEMINI_API_KEY")
+        if not gemini_key:
+            yield "⚠️ **Gemini Error:** `GEMINI_API_KEY` is not set in Render environment variables."
             return
         
         try:
+            from google import genai
+            client = genai.Client(api_key=gemini_key)
+            
             contents = []
             for user_msg, bot_msg in history:
                 if user_msg:
@@ -63,7 +52,7 @@ def respond(message, history, system_prompt, model_choice, pdf_file, max_tokens,
                     contents.append({"role": "model", "parts": [{"text": bot_msg}]})
             contents.append({"role": "user", "parts": [{"text": message}]})
 
-            response = genai_client.models.generate_content(
+            response = client.models.generate_content(
                 model="gemini-1.5-flash",
                 contents=contents,
                 config={
@@ -78,7 +67,7 @@ def respond(message, history, system_prompt, model_choice, pdf_file, max_tokens,
             yield f"⚠️ **Gemini API Error:** {str(e)}"
             return
 
-    # Fallback / Default Hugging Face Engine (Qwen 2.5 7B)
+    # Default / Qwen Engine
     messages = [{"role": "system", "content": full_system_prompt}]
     for user_msg, bot_msg in history:
         if user_msg:
@@ -100,10 +89,6 @@ def respond(message, history, system_prompt, model_choice, pdf_file, max_tokens,
         yield f"⚠️ **HuggingFace API Error:** {str(e)}"
 
 # --- UI INTERFACE ---
-available_models = ["Qwen 2.5 7B (Default)"]
-if HAS_GEMINI:
-    available_models.append("Gemini 1.5 Flash")
-
 demo = gr.ChatInterface(
     respond,
     additional_inputs=[
@@ -120,3 +105,4 @@ demo = gr.ChatInterface(
 if __name__ == "__main__":
     port_number = int(os.environ.get("PORT", 10000))
     demo.launch(server_name="0.0.0.0", server_port=port_number)
+    
