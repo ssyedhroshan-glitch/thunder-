@@ -100,7 +100,7 @@ demo = gr.ChatInterface(
     ],
     title="⚡ THUNDER WORKSPACE",
     description="Multi-model Assistant with PDF document context support.",
-    ssr_mode=False  # Prevents Gradio schema/SSR crashes on cloud servers
+    ssr_mode=False
 )
 
 if __name__ == "__main__":
@@ -108,8 +108,6 @@ if __name__ == "__main__":
     demo.launch(
         server_name="0.0.0.0",
         server_port=port_number,
-        share=False,
-        show_error=True,
         allowed_paths=["*"]
     )
     
