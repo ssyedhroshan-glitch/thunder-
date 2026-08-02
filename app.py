@@ -370,7 +370,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="blue", neutral_hue="slate"), cs
 
     clear_btn.click(do_clear, [session_id], [chatbot, chat_state, engine_status])
 
-# --- RENDER LAUNCH CONFIGURATION ---
+# --- RENDER BINDING ---
 port_number = int(os.environ.get("PORT", 10000))
 
 if __name__ == "__main__":
