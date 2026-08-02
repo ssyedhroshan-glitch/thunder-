@@ -2,7 +2,7 @@ import os
 import gradio as gr
 from huggingface_hub import InferenceClient
 
-# HuggingFace Client (Primary)
+# HuggingFace Client
 HF_TOKEN = os.environ.get("HF_TOKEN")
 hf_client = InferenceClient("Qwen/Qwen2.5-7B-Instruct", token=HF_TOKEN)
 
@@ -100,9 +100,16 @@ demo = gr.ChatInterface(
     ],
     title="⚡ THUNDER WORKSPACE",
     description="Multi-model Assistant with PDF document context support.",
+    ssr_mode=False  # Prevents Gradio schema/SSR crashes on cloud servers
 )
 
 if __name__ == "__main__":
     port_number = int(os.environ.get("PORT", 10000))
-    demo.launch(server_name="0.0.0.0", server_port=port_number)
+    demo.launch(
+        server_name="0.0.0.0",
+        server_port=port_number,
+        share=False,
+        show_error=True,
+        allowed_paths=["*"]
+    )
     
