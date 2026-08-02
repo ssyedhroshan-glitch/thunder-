@@ -112,7 +112,6 @@ DEFAULT_SYSTEM_PROMPT = (
 
 # --- ADVANCED TOOLS & EXECUTION ---
 def run_python_interpreter(code_str):
-    """Executes Python code in a sandboxed capture environment."""
     output_buffer = io.StringIO()
     try:
         with contextlib.redirect_stdout(output_buffer), contextlib.redirect_stderr(output_buffer):
@@ -130,18 +129,6 @@ def transcribe(audio_path):
         return res.text if hasattr(res, "text") else str(res)
     except Exception as e:
         return f"[Transcription Error: {e}]"
-
-def speak(text, enabled=True):
-    if not text or not enabled: return None
-    try:
-        clean_text = text.replace("*", "").replace("#", "").replace("`", "")[:200]
-        audio_bytes = tts_client.text_to_speech(clean_text)
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-        tmp.write(audio_bytes)
-        tmp.close()
-        return tmp.name
-    except Exception:
-        return None
 
 def read_file(file_obj):
     if file_obj is None: return ""
@@ -169,34 +156,24 @@ def web_search(query, max_results=3):
     except Exception as e:
         return f"[Research Error: {e}]"
 
-# --- MULTI-MODEL ENGINE ROUTER ---
+# --- MULTI-MODEL ROUTER (OpenAI, Claude, Perplexity, Gemini, DeepSeek, Qwen) ---
 def stream_model_response(model_choice, messages, temp, tokens):
-    # Engine 1: Gemini 1.5 Flash
+    # 1. Gemini 1.5 Flash
     if model_choice == "Gemini 1.5 Flash":
         gemini_key = os.environ.get("GEMINI_API_KEY")
         if not gemini_key:
-            yield "⚠️ **Gemini Error:** `GEMINI_API_KEY` is missing from Render environment variables."
+            yield "⚠️ **Gemini Error:** `GEMINI_API_KEY` is missing in Render environment variables."
             return
         try:
             from google import genai
             client = genai.Client(api_key=gemini_key)
-            
             system_instr = messages[0]["content"] if messages and messages[0]["role"] == "system" else ""
-            contents = []
-            for msg in messages:
-                if msg["role"] == "user":
-                    contents.append({"role": "user", "parts": [{"text": msg["content"]}]})
-                elif msg["role"] == "assistant":
-                    contents.append({"role": "model", "parts": [{"text": msg["content"]}]})
+            contents = [{"role": "user" if m["role"] == "user" else "model", "parts": [{"text": m["content"]}]} for m in messages if m["role"] != "system"]
 
             response = client.models.generate_content(
                 model="gemini-1.5-flash",
                 contents=contents,
-                config={
-                    "system_instruction": system_instr,
-                    "temperature": float(temp),
-                    "max_output_tokens": int(tokens)
-                }
+                config={"system_instruction": system_instr, "temperature": float(temp), "max_output_tokens": int(tokens)}
             )
             yield response.text or "[Empty Response]"
             return
@@ -204,7 +181,87 @@ def stream_model_response(model_choice, messages, temp, tokens):
             yield f"⚠️ **Gemini API Error:** {e}"
             return
 
-    # Engine 2: DeepSeek R1 Reasoning (via HF)
+    # 2. OpenAI (GPT-4o)
+    elif model_choice == "OpenAI (GPT-4o)":
+        openai_key = os.environ.get("OPENAI_API_KEY")
+        if not openai_key:
+            yield "⚠️ **OpenAI Error:** `OPENAI_API_KEY` environment variable is missing on Render."
+            return
+        try:
+            from openai import OpenAI
+            oai_client = OpenAI(api_key=openai_key)
+            response_text = ""
+            stream = oai_client.chat.completions.create(
+                model="gpt-4o",
+                messages=messages,
+                temperature=float(temp),
+                max_tokens=int(tokens),
+                stream=True
+            )
+            for chunk in stream:
+                if chunk.choices[0].delta.content:
+                    response_text += chunk.choices[0].delta.content
+                    yield response_text
+            return
+        except Exception as e:
+            yield f"⚠️ **OpenAI API Error:** {e}"
+            return
+
+    # 3. Claude 3.5 Sonnet (Anthropic)
+    elif model_choice == "Claude 3.5 Sonnet":
+        anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+        if not anthropic_key:
+            yield "⚠️ **Anthropic Error:** `ANTHROPIC_API_KEY` environment variable is missing on Render."
+            return
+        try:
+            import anthropic
+            ant_client = anthropic.Anthropic(api_key=anthropic_key)
+            system_instr = messages[0]["content"] if messages and messages[0]["role"] == "system" else ""
+            anthropic_msgs = [{"role": m["role"], "content": m["content"]} for m in messages if m["role"] != "system"]
+
+            response_text = ""
+            with ant_client.messages.stream(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=int(tokens),
+                temperature=float(temp),
+                system=system_instr,
+                messages=anthropic_msgs
+            ) as stream:
+                for text_chunk in stream.text_stream:
+                    response_text += text_chunk
+                    yield response_text
+            return
+        except Exception as e:
+            yield f"⚠️ **Claude API Error:** {e}"
+            return
+
+    # 4. Perplexity AI (Sonar)
+    elif model_choice == "Perplexity (Sonar)":
+        pplx_key = os.environ.get("PERPLEXITY_API_KEY")
+        if not pplx_key:
+            yield "⚠️ **Perplexity Error:** `PERPLEXITY_API_KEY` environment variable is missing on Render."
+            return
+        try:
+            from openai import OpenAI
+            pplx_client = OpenAI(api_key=pplx_key, base_url="https://api.perplexity.ai")
+            response_text = ""
+            stream = pplx_client.chat.completions.create(
+                model="sonar-pro",
+                messages=messages,
+                temperature=float(temp),
+                max_tokens=int(tokens),
+                stream=True
+            )
+            for chunk in stream:
+                if chunk.choices[0].delta.content:
+                    response_text += chunk.choices[0].delta.content
+                    yield response_text
+            return
+        except Exception as e:
+            yield f"⚠️ **Perplexity API Error:** {e}"
+            return
+
+    # 5. DeepSeek R1 Reasoning
     elif model_choice == "DeepSeek R1 (Reasoning)":
         try:
             deepseek_client = InferenceClient(model="deepseek-ai/DeepSeek-R1-Distill-Qwen-32B", token=hf_token)
@@ -219,7 +276,7 @@ def stream_model_response(model_choice, messages, temp, tokens):
             yield f"⚠️ **DeepSeek R1 Error:** {e}"
             return
 
-    # Default Engine: Qwen 2.5 7B
+    # 6. Default Engine: Qwen 2.5 7B
     else:
         full_res = ""
         for token in qwen_client.chat_completion(messages, max_tokens=int(tokens), temperature=float(temp), stream=True):
@@ -244,7 +301,6 @@ body, .gradio-container {background-color: #0b0f19 !important;}
 }
 """
 
-# --- INTERFACE BUILD ---
 with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), css=custom_css) as demo:
 
     session_id = gr.State(None)
@@ -254,13 +310,20 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
     gr.Markdown("<center><h2 style='color:#22d3ee; margin-bottom:5px;'>⚡ THUNDER ADVANCED AI PLATFORM</h2></center>")
 
     with gr.Row():
-        # LEFT COLUMN: Controls & Multi-Model Engine
         with gr.Column(scale=4, elem_classes=["panel-card"]):
             session_selector = gr.Dropdown(choices=[], label="Workspace Session", interactive=True)
             new_session_btn = gr.Button("➕ New Workspace", size="sm")
             
+            # Expanded Model Engine Dropdown
             model_choice = gr.Dropdown(
-                choices=["Qwen 2.5 7B (Default)", "Gemini 1.5 Flash", "DeepSeek R1 (Reasoning)"],
+                choices=[
+                    "Qwen 2.5 7B (Default)",
+                    "Gemini 1.5 Flash",
+                    "OpenAI (GPT-4o)",
+                    "Claude 3.5 Sonnet",
+                    "Perplexity (Sonar)",
+                    "DeepSeek R1 (Reasoning)"
+                ],
                 value="Qwen 2.5 7B (Default)",
                 label="Select AI Model Engine"
             )
@@ -275,22 +338,18 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
             research_toggle = gr.Checkbox(label="🔍 Deep Web Research Agent", value=False)
             clear_btn = gr.Button("Reset Chat", variant="stop")
 
-        # CENTER COLUMN: Primary Chat Engine
         with gr.Column(scale=8):
             chatbot = gr.Chatbot(height=520, elem_classes=["chatbot-container"], type="messages")
             with gr.Row():
                 msg = gr.Textbox(placeholder="Message Thunder AI...", show_label=False, container=False, scale=9)
                 send_btn = gr.Button("⚡", variant="primary", scale=1)
-            reply_audio = gr.Audio(autoplay=True, visible=False)
 
-        # RIGHT COLUMN: Interactive Artifacts & Code Interpreter Workbench
         with gr.Column(scale=6, elem_classes=["panel-card"]):
             gr.Markdown("### 🛠️ Interactive Artifacts & Execution")
             artifact_code = gr.Code(label="Python Code Sandbox", language="python", lines=12)
             exec_btn = gr.Button("▶️ Execute Code", variant="primary", size="sm")
             exec_output = gr.Textbox(label="Execution Output", lines=6, interactive=False)
 
-    # --- EVENT BINDINGS & LOGIC ---
     def start_session():
         init_db()
         sessions = get_all_sessions()
