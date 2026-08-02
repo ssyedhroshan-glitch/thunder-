@@ -5,4 +5,3 @@ google-genai
 anthropic>=0.34.0
 duckduckgo-search>=6.0.0
 pypdf>=4.0.0
-
