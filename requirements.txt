@@ -1,5 +1,5 @@
-gradio==4.44.1
-pydantic==2.10.6
+gradio==5.15.0
+pydantic
 huggingface_hub>=0.25.0
 pypdf>=4.0.0
 google-genai
