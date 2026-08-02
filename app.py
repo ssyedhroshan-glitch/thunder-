@@ -2,6 +2,29 @@ import os
 import uuid
 import tempfile
 import sqlite3
+
+# --- PATCH: Fix Gradio's internal "TypeError: argument of type 'bool' is not iterable" bug ---
+# This happens because some Gradio/Pydantic version combinations produce a JSON schema where
+# a boolean (True/False) appears where a dict is expected. Gradio's own schema parser doesn't
+# handle that case, and it crashes on launch before your app ever starts. This patch makes the
+# parser treat a boolean schema as a generic type instead of crashing.
+import gradio_client.utils as _gc_utils
+
+_original_get_type = _gc_utils.get_type
+def _patched_get_type(schema):
+    if isinstance(schema, bool):
+        return "Any"
+    return _original_get_type(schema)
+_gc_utils.get_type = _patched_get_type
+
+_original_json_schema_to_python_type = _gc_utils._json_schema_to_python_type
+def _patched_json_schema_to_python_type(schema, defs=None):
+    if isinstance(schema, bool):
+        return "Any"
+    return _original_json_schema_to_python_type(schema, defs)
+_gc_utils._json_schema_to_python_type = _patched_json_schema_to_python_type
+# --- END PATCH ---
+
 import gradio as gr
 from huggingface_hub import InferenceClient
 
@@ -17,7 +40,6 @@ DB_PATH = "thunder_memory.db"
 # --- CORE PERSISTENT MULTI-SESSION SQL DATABASE ENGINE ---
 def init_db():
     conn = sqlite3.connect(DB_PATH)
-    # Create sessions table
     conn.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
             id TEXT PRIMARY KEY,
@@ -25,7 +47,6 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    # Create history table
     conn.execute("""
         CREATE TABLE IF NOT EXISTS history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -36,8 +57,7 @@ def init_db():
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_session ON history(session_id)")
-    
-    # Initialize a default session if no sessions exist
+
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM sessions")
     if cursor.fetchone()[0] == 0:
@@ -70,8 +90,7 @@ def delete_session_from_db(session_id):
     conn = sqlite3.connect(DB_PATH)
     conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
     conn.execute("DELETE FROM history WHERE session_id = ?", (session_id,))
-    
-    # Secure fallback fallback: Ensure at least one session remains
+
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM sessions")
     if cursor.fetchone()[0] == 0:
@@ -102,8 +121,7 @@ def load_history(session_id):
         (session_id,)
     ).fetchall()
     conn.close()
-    
-    # Universal fallback list parser
+
     chat_list = []
     for role, content in rows:
         chat_list.append({"role": role, "content": content})
@@ -150,10 +168,10 @@ def read_file(file_obj):
         if ext == ".pdf":
             from pypdf import PdfReader
             reader = PdfReader(file_path)
-            text = "\n".join((page.extract_text() or "") for i, page in enumerate(reader.pages) if i < 15) # Safe page count limits
+            text = "\n".join((page.extract_text() or "") for i, page in enumerate(reader.pages) if i < 15)
         elif ext in (".txt", ".md", ".csv", ".py", ".json", ".js", ".ts"):
             with open(file_path, "r", errors="ignore", encoding="utf-8") as f:
-                text = f.read(15000) # Prevents memory leaks with smart context clipping
+                text = f.read(15000)
         else:
             return f"[Attached Asset File: {os.path.basename(file_path)}]"
         return text[:12000]
@@ -171,17 +189,15 @@ def web_search(query, max_results=3):
     except Exception as e:
         return f"[Deep Research Error: {e}]"
 
-# --- CONTEXT-BUDGET OPTIMIZED PROMPT ASSEMBLY ---
 def build_messages(chat_history, system_prompt, file_context, search_context):
     messages = [{"role": "system", "content": system_prompt}]
     if search_context:
         messages.append({"role": "system", "content": "Deep Research Results:\n\n" + search_context})
     if file_context:
         messages.append({"role": "system", "content": "Attached Document Reference:\n\n" + file_context})
-    
-    # Smart context trimming: Feed only the last 10 messages to avoid 504 timeouts
+
     recent_history = chat_history[-10:] if len(chat_history) > 10 else chat_history
-    
+
     for msg in recent_history:
         if isinstance(msg, dict):
             messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
@@ -191,22 +207,25 @@ def build_messages(chat_history, system_prompt, file_context, search_context):
     return messages
 
 def stream_reply(messages, temperature, max_tokens):
+    """Uses the classic chat_completion() call for broad huggingface_hub version compatibility."""
     text = ""
-    for chunk in client.chat.completions.create(
-        messages=messages,
+    for token in client.chat_completion(
+        messages,
         max_tokens=max_tokens,
         temperature=temperature,
         stream=True
     ):
-        text += chunk.choices[0].delta.content or ""
-        yield text
+        token_text = token.choices[0].delta.content
+        if token_text:
+            text += token_text
+            yield text
 
 # --- PREMIUM CYBERPUNK THEME DESIGN MATRIX ---
 custom_css = """
 footer {visibility: hidden;}
 body, .gradio-container {background-color: #0b0f19 !important;}
 .panel-card {
-    background-color: #121826 !important; 
+    background-color: #121826 !important;
     border: 1px solid #1f293d !important;
     border-radius: 12px !important;
     padding: 14px !important;
@@ -239,17 +258,16 @@ body, .gradio-container {background-color: #0b0f19 !important;}
 """
 
 with gr.Blocks(
-    theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
+    theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"),
     css=custom_css,
     js="() => { document.querySelector('body').classList.add('dark'); }"
 ) as demo:
-    
+
     session_id = gr.State(None)
     chat_state = gr.State([])
     file_context_state = gr.State("")
     features_visible = gr.State(False)
 
-    # TOP ALIGNED DYNAMIC CONFIGURATION HEADER
     with gr.Row(elem_classes=["header-row"]):
         with gr.Column(scale=3):
             settings_toggle = gr.Checkbox(label="⚙️ Settings Option", value=False, container=False)
@@ -261,7 +279,6 @@ with gr.Blocks(
             new_session_btn = gr.Button("➕ Session", size="sm", variant="secondary")
             clear_btn = gr.Button("🆕 Reset", variant="stop", size="sm")
 
-    # EXPANDABLE SYSTEM PREFERENCE SYSTEM DRAWER
     with gr.Group(visible=False, elem_classes=["panel-card"]) as settings_panel:
         with gr.Row():
             with gr.Column(scale=6):
@@ -274,9 +291,9 @@ with gr.Blocks(
                 session_rename_box = gr.Textbox(placeholder="Rename active workspace...", show_label=False)
                 rename_session_btn = gr.Button("Rename Workspace", size="sm")
 
-    chatbot = gr.Chatbot(height=480, elem_classes=["chatbot-container"])
+    # NOTE: type="messages" added to match the dict-based {"role","content"} history format
+    chatbot = gr.Chatbot(height=480, elem_classes=["chatbot-container"], type="messages")
 
-    # HIDDEN EXPANDABLE OPTIONS VAULT
     with gr.Group(visible=False, elem_classes=["panel-card"]) as features_vault:
         gr.Markdown("🌟 **Additional Features Suite**")
         with gr.Row():
@@ -291,7 +308,6 @@ with gr.Blocks(
             with gr.Column(scale=2, min_width=120):
                 canvas_input = gr.Image(sources=["upload"], type="filepath", label="🎨 Image Editing")
 
-    # NESTED CONSOLE MATRIX LAYOUT BAR
     with gr.Row(elem_classes=["console-row"]):
         features_btn = gr.Button("➕", variant="secondary", size="sm", min_width=50)
         with gr.Column(elem_classes=["msg-container"]):
@@ -304,28 +320,23 @@ with gr.Blocks(
 
     reply_audio = gr.Audio(autoplay=True, visible=False)
 
-    # --- CONTROLLER INTERACTION LOGIC ---
     def start_session():
         init_db()
         sessions = get_all_sessions()
-        # Default fallback to first active session ID
         active_id = sessions[0][0] if sessions else ""
         initial_history = load_history(active_id)
-        
-        # Build dropdown selection names
+
         session_choices = [(name, sid) for sid, name in sessions]
         return active_id, initial_history, initial_history, gr.update(choices=session_choices, value=active_id)
 
     demo.load(start_session, None, [session_id, chatbot, chat_state, session_selector])
 
-    # Dynamic drawer mapping switches
     settings_toggle.change(lambda visible: gr.update(visible=visible), inputs=[settings_toggle], outputs=[settings_panel])
-    
+
     def toggle_vault(current_state):
         return not current_state, gr.update(visible=not current_state)
     features_btn.click(toggle_vault, [features_visible], [features_visible, features_vault])
 
-    # Dynamic Workspace Sessions Manager Events
     def switch_active_session(target_id):
         if not target_id:
             return gr.update(), [], []
@@ -383,53 +394,38 @@ with gr.Blocks(
             elif cam: message = "📷 [Camera stream frame captured]"
             elif sketch: message = "🎨 [Canvas frame updated]"
         if not message: return "", history, history
-        
-        if len(history) > 0 and isinstance(history[0], dict):
-            new_history = history + [{"role": "user", "content": message}]
-        else:
-            new_history = history + [[message, ""]]
-            
+
+        new_history = history + [{"role": "user", "content": message}]
         save_message(sid, "user", message)
         return "", new_history, new_history
 
     def bot_reply(history, sys_prompt, temp, tokens, f_context, research_on, sid):
         if not history: return history, history
-        
-        is_dict = isinstance(history[0], dict)
-        last_user = history[-1]["content"] if is_dict else history[-1][0]
-        
+
+        last_user = history[-1]["content"]
+
         search_context = web_search(last_user) if research_on else ""
         messages = build_messages(history[:-1], sys_prompt, f_context, search_context)
         messages.append({"role": "user", "content": last_user})
 
-        if is_dict:
-            history = history + [{"role": "assistant", "content": ""}]
-        else:
-            history = history + [[last_user, ""]]
+        history = history + [{"role": "assistant", "content": ""}]
 
         final_text = ""
         try:
             for partial in stream_reply(messages, temp, tokens):
                 final_text = partial
-                if is_dict:
-                    history[-1]["content"] = final_text
-                else:
-                    history[-1][1] = final_text
+                history[-1]["content"] = final_text
                 yield history, history
             save_message(sid, "assistant", final_text)
         except Exception as e:
             err = f"Engine Error: {e}"
-            if is_dict:
-                history[-1]["content"] = err
-            else:
-                history[-1][1] = err
+            history[-1]["content"] = err
             save_message(sid, "assistant", err)
             yield history, history
 
     def bot_speak(history, audio_enabled):
         if not history or not audio_enabled: return None
-        is_dict = isinstance(history[0], dict)
-        text = history[-1]["content"] if is_dict else history[-1][1]
+        text = history[-1]["content"]
         if text: return speak(text, audio_enabled)
         return None
 
@@ -464,3 +460,4 @@ with gr.Blocks(
 
 port_number = int(os.environ.get("PORT", 10000))
 demo.queue(default_concurrency_limit=4).launch(server_name="0.0.0.0", server_port=port_number)
+                                        
