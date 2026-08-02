@@ -4,6 +4,7 @@ import uuid
 import tempfile
 import sqlite3
 import io
+import re
 import contextlib
 
 # --- GRADIO SCHEMA BUG PATCH ---
@@ -32,7 +33,6 @@ hf_token = os.environ.get("HF_TOKEN")
 # Core Inference Clients
 qwen_client = InferenceClient(model="Qwen/Qwen2.5-7B-Instruct", token=hf_token)
 whisper_client = InferenceClient(model="openai/whisper-large-v3", token=hf_token)
-tts_client = InferenceClient(model="microsoft/speecht5_tts", token=hf_token)
 
 DB_PATH = "thunder_memory.db"
 
@@ -107,8 +107,17 @@ init_db()
 
 DEFAULT_SYSTEM_PROMPT = (
     "You are Thunder AI, an elite, high-velocity co-founder and AI collaborator. "
-    "You provide hyper-accurate, structured, and witty responses using crisp headings and bullet points."
+    "You provide hyper-accurate, structured, and witty responses using crisp headings and bullet points. "
+    "When generating code, always wrap runnable Python blocks in standard markdown ```python blocks."
 )
+
+# --- AUTOMATIC CODE EXTRACTION UTILITY ---
+def extract_python_code(text):
+    """Extracts the first or most recent python block from response text."""
+    matches = re.findall(r"```python\s*(.*?)\s*```", text, re.DOTALL)
+    if matches:
+        return matches[-1].strip()
+    return None
 
 # --- ADVANCED TOOLS & EXECUTION ---
 def run_python_interpreter(code_str):
@@ -156,9 +165,8 @@ def web_search(query, max_results=3):
     except Exception as e:
         return f"[Research Error: {e}]"
 
-# --- MULTI-MODEL ROUTER (OpenAI, Claude, Perplexity, Gemini, DeepSeek, Qwen) ---
+# --- MULTI-MODEL ROUTER ---
 def stream_model_response(model_choice, messages, temp, tokens):
-    # 1. Gemini 1.5 Flash
     if model_choice == "Gemini 1.5 Flash":
         gemini_key = os.environ.get("GEMINI_API_KEY")
         if not gemini_key:
@@ -181,7 +189,6 @@ def stream_model_response(model_choice, messages, temp, tokens):
             yield f"⚠️ **Gemini API Error:** {e}"
             return
 
-    # 2. OpenAI (GPT-4o)
     elif model_choice == "OpenAI (GPT-4o)":
         openai_key = os.environ.get("OPENAI_API_KEY")
         if not openai_key:
@@ -207,7 +214,6 @@ def stream_model_response(model_choice, messages, temp, tokens):
             yield f"⚠️ **OpenAI API Error:** {e}"
             return
 
-    # 3. Claude 3.5 Sonnet (Anthropic)
     elif model_choice == "Claude 3.5 Sonnet":
         anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
         if not anthropic_key:
@@ -235,7 +241,6 @@ def stream_model_response(model_choice, messages, temp, tokens):
             yield f"⚠️ **Claude API Error:** {e}"
             return
 
-    # 4. Perplexity AI (Sonar)
     elif model_choice == "Perplexity (Sonar)":
         pplx_key = os.environ.get("PERPLEXITY_API_KEY")
         if not pplx_key:
@@ -243,7 +248,7 @@ def stream_model_response(model_choice, messages, temp, tokens):
             return
         try:
             from openai import OpenAI
-            pplx_client = OpenAI(api_key=pplx_key, base_url="https://api.perplexity.ai")
+            pplx_client = OpenAI(api_key=pplx_key, base_url="[https://api.perplexity.ai](https://api.perplexity.ai)")
             response_text = ""
             stream = pplx_client.chat.completions.create(
                 model="sonar-pro",
@@ -261,7 +266,6 @@ def stream_model_response(model_choice, messages, temp, tokens):
             yield f"⚠️ **Perplexity API Error:** {e}"
             return
 
-    # 5. DeepSeek R1 Reasoning
     elif model_choice == "DeepSeek R1 (Reasoning)":
         try:
             deepseek_client = InferenceClient(model="deepseek-ai/DeepSeek-R1-Distill-Qwen-32B", token=hf_token)
@@ -276,7 +280,6 @@ def stream_model_response(model_choice, messages, temp, tokens):
             yield f"⚠️ **DeepSeek R1 Error:** {e}"
             return
 
-    # 6. Default Engine: Qwen 2.5 7B
     else:
         full_res = ""
         for token in qwen_client.chat_completion(messages, max_tokens=int(tokens), temperature=float(temp), stream=True):
@@ -314,7 +317,6 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
             session_selector = gr.Dropdown(choices=[], label="Workspace Session", interactive=True)
             new_session_btn = gr.Button("➕ New Workspace", size="sm")
             
-            # Expanded Model Engine Dropdown
             model_choice = gr.Dropdown(
                 choices=[
                     "Qwen 2.5 7B (Default)",
@@ -384,8 +386,8 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
         save_message(sid, "user", message)
         return "", new_hist, new_hist
 
-    def bot_reply(history, sys_prompt, model_sel, temp, tokens, f_context, research_on, sid):
-        if not history: yield history, history; return
+    def bot_reply(history, sys_prompt, model_sel, temp, tokens, f_context, research_on, sid, current_code):
+        if not history: yield history, history, current_code; return
 
         last_user = history[-1]["content"]
         search_context = web_search(last_user) if research_on else ""
@@ -403,16 +405,24 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
         for chunk in stream_model_response(model_sel, messages, temp, tokens):
             full_text = chunk
             history[-1]["content"] = full_text
-            yield history, history
+            
+            extracted_code = extract_python_code(full_text)
+            code_out = extracted_code if extracted_code else current_code
+            
+            yield history, history, code_out
 
         save_message(sid, "assistant", full_text)
 
     msg.submit(user_send, [msg, chat_state, session_id], [msg, chatbot, chat_state]).then(
-        bot_reply, [chat_state, system_prompt, model_choice, temperature, max_tokens, file_context_state, research_toggle, session_id], [chatbot, chat_state]
+        bot_reply, 
+        [chat_state, system_prompt, model_choice, temperature, max_tokens, file_context_state, research_toggle, session_id, artifact_code], 
+        [chatbot, chat_state, artifact_code]
     )
 
     send_btn.click(user_send, [msg, chat_state, session_id], [msg, chatbot, chat_state]).then(
-        bot_reply, [chat_state, system_prompt, model_choice, temperature, max_tokens, file_context_state, research_toggle, session_id], [chatbot, chat_state]
+        bot_reply, 
+        [chat_state, system_prompt, model_choice, temperature, max_tokens, file_context_state, research_toggle, session_id, artifact_code], 
+        [chatbot, chat_state, artifact_code]
     )
 
     exec_btn.click(run_python_interpreter, inputs=[artifact_code], outputs=[exec_output])
@@ -420,4 +430,4 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
 
 port_number = int(os.environ.get("PORT", 10000))
 demo.queue(default_concurrency_limit=4).launch(server_name="0.0.0.0", server_port=port_number)
-            
+        
