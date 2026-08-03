@@ -345,7 +345,7 @@ def stream_model_response(model_choice, messages, temp, tokens):
                     fn_name = tool_call.function.name
                     try:
                         args = json.loads(tool_call.function.arguments)
-                    except:
+                    except Exception:
                         args = {}
                     yield f"🛠️ **Agent Action:** Executing tool `{fn_name}` with arguments `{args}`...\n\n"
                     tool_result = execute_tool_call(fn_name, args)
@@ -513,4 +513,47 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
             if err:
                 history[-1]["content"] = f"⚠️ **Image Generation Failed:** {err}"
             else:
-                history[-1]["co
+                history[-1]["content"] = f"Here is your generated image for **\"{image_prompt}\"**:\n\n![{image_prompt}]({img_path})"
+                
+            save_message(sid, "assistant", history[-1]["content"])
+            yield history, history, current_code
+            return
+
+        # Prepare System & Document Context
+        messages = [{"role": "system", "content": sys_prompt}]
+        if f_context: messages.append({"role": "system", "content": f"Document Context:\n{f_context}"})
+
+        for msg_item in history:
+            messages.append({"role": msg_item["role"], "content": msg_item["content"]})
+
+        history = history + [{"role": "assistant", "content": ""}]
+
+        full_text = ""
+        for chunk in stream_model_response(model_sel, messages, temp, tokens):
+            full_text = chunk
+            history[-1]["content"] = full_text
+            
+            extracted_code = extract_python_code(full_text)
+            code_out = extracted_code if extracted_code else current_code
+            
+            yield history, history, code_out
+
+        save_message(sid, "assistant", full_text)
+
+    msg.submit(user_send, [msg, chat_state, session_id], [msg, chatbot, chat_state]).then(
+        bot_reply, 
+        [chat_state, system_prompt, model_choice, temperature, max_tokens, file_context_state, session_id, artifact_code], 
+        [chatbot, chat_state, artifact_code]
+    )
+
+    send_btn.click(user_send, [msg, chat_state, session_id], [msg, chatbot, chat_state]).then(
+        bot_reply, 
+        [chat_state, system_prompt, model_choice, temperature, max_tokens, file_context_state, session_id, artifact_code], 
+        [chatbot, chat_state, artifact_code]
+    )
+
+    exec_btn.click(tool_execute_python, inputs=[artifact_code], outputs=[exec_output])
+    clear_btn.click(lambda sid: (clear_session_history(sid), [], [])[1:], inputs=[session_id], outputs=[chatbot, chat_state])
+
+port_number = int(os.environ.get("PORT", 10000))
+demo.queue(default_concurrency_limit=4).launch(server_name="0.0.0.0", server_port=port_number)
