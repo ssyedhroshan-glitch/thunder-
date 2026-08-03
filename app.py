@@ -6,6 +6,7 @@ import sqlite3
 import io
 import re
 import json
+import base64
 import contextlib
 import requests
 
@@ -40,19 +41,19 @@ ollama_host = os.environ.get("OLLAMA_HOST", "https://ollama.com")
 
 DB_PATH = "thunder_memory.db"
 
-# Model Clients (Level 1)
-qwen_client = InferenceClient(model="Qwen/Qwen2.5-7B-Instruct", token=hf_token) if hf_token else InferenceClient(model="Qwen/Qwen2.5-7B-Instruct")
-whisper_client = InferenceClient(model="openai/whisper-large-v3", token=hf_token) if hf_token else InferenceClient(model="openai/whisper-large-v3")
+# Fast-loading Clients
+qwen_client = InferenceClient(model="Qwen/Qwen2.5-7B-Instruct", token=hf_token, timeout=15) if hf_token else InferenceClient(model="Qwen/Qwen2.5-7B-Instruct", timeout=15)
+whisper_client = InferenceClient(model="openai/whisper-large-v3", token=hf_token, timeout=15) if hf_token else InferenceClient(model="openai/whisper-large-v3", timeout=15)
 
 # ==========================================
-# LEVEL 2: AUTONOMOUS TOOL DEFINITIONS
+# LEVEL 2: FAST AUTONOMOUS TOOLS
 # ==========================================
 TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": "Perform live internet search queries to retrieve up-to-date knowledge.",
+            "description": "Perform quick web searches to look up up-to-date facts.",
             "parameters": {
                 "type": "object",
                 "properties": {"query": {"type": "string", "description": "Search query."}},
@@ -64,23 +65,11 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "execute_python",
-            "description": "Execute Python code safely in an isolated environment for math or data processing.",
+            "description": "Execute Python code in an isolated environment.",
             "parameters": {
                 "type": "object",
-                "properties": {"code": {"type": "string", "description": "Valid Python code string."}},
+                "properties": {"code": {"type": "string", "description": "Python snippet."}},
                 "required": ["code"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "scrape_url",
-            "description": "Fetch and extract text content from a public web URL.",
-            "parameters": {
-                "type": "object",
-                "properties": {"url": {"type": "string", "description": "Target webpage URL."}},
-                "required": ["url"]
             }
         }
     }
@@ -90,7 +79,7 @@ def tool_web_search(query: str):
     try:
         from duckduckgo_search import DDGS
         with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=4))
+            results = list(ddgs.text(query, max_results=2))
         if not results: return "No web results found."
         return "\n---\n".join([f"Title: {r.get('title')}\nURL: {r.get('href')}\nSnippet: {r.get('body')}" for r in results])
     except Exception as e:
@@ -103,28 +92,17 @@ def tool_execute_python(code: str):
             exec_globals = {"__builtins__": __builtins__}
             exec(code, exec_globals)
         res = output_buffer.getvalue()
-        return res if res.strip() else "[Code Executed Successfully with no stdout output]"
+        return res if res.strip() else "[Code executed successfully]"
     except Exception as e:
         return f"Python Execution Error: {e}"
-
-def tool_scrape_url(url: str):
-    try:
-        headers = {"User-Agent": "Mozilla/5.0"}
-        resp = requests.get(url, headers=headers, timeout=10)
-        resp.raise_for_status()
-        text = re.sub(r'<[^>]+>', ' ', resp.text)
-        return ' '.join(text.split())[:4000]
-    except Exception as e:
-        return f"Scraping Error: {e}"
 
 def execute_tool_call(tool_name, arguments):
     if tool_name == "web_search": return tool_web_search(arguments.get("query", ""))
     elif tool_name == "execute_python": return tool_execute_python(arguments.get("code", ""))
-    elif tool_name == "scrape_url": return tool_scrape_url(arguments.get("url", ""))
     return f"Unknown tool: {tool_name}"
 
 # ==========================================
-# LEVEL 1: SQL PERSISTENCE & MEDIA ENGINES
+# DATABASE & STORAGE MANAGEMENT
 # ==========================================
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -170,23 +148,28 @@ def load_history(session_id):
 
 init_db()
 
-def generate_image_flux(prompt: str):
+# ==========================================
+# FAST MEDIA ENGINES (BASE64 & WHISPER)
+# ==========================================
+def generate_image_flux_base64(prompt: str):
+    """Generates FLUX images directly into base64 data URIs so Gradio/HTML renders them reliably."""
     try:
-        flux_client = InferenceClient(model="black-forest-labs/FLUX.1-schnell", token=hf_token)
+        flux_client = InferenceClient(model="black-forest-labs/FLUX.1-schnell", token=hf_token, timeout=30)
         image_obj = flux_client.text_to_image(prompt)
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-        image_obj.save(tmp.name)
-        return tmp.name, None
+        buffered = io.BytesIO()
+        image_obj.save(buffered, format="PNG")
+        img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
+        return f"data:image/png;base64,{img_str}", None
     except Exception as e:
         return None, str(e)
 
-def transcribe(audio_path):
+def transcribe_audio(audio_path):
     if not audio_path: return ""
     try:
         res = whisper_client.automatic_speech_recognition(audio_path)
-        return res.text if hasattr(res, "text") else str(res)
+        return res.get("text", "") if isinstance(res, dict) else str(res)
     except Exception as e:
-        return f"[Transcription Error: {e}]"
+        return f"[Audio Error: {e}]"
 
 def read_file(file_obj):
     if file_obj is None: return ""
@@ -196,18 +179,17 @@ def read_file(file_obj):
         if ext == ".pdf":
             from pypdf import PdfReader
             reader = PdfReader(file_path)
-            return "\n".join((page.extract_text() or "") for i, page in enumerate(reader.pages) if i < 15)[:12000]
+            return "\n".join((page.extract_text() or "") for i, page in enumerate(reader.pages) if i < 10)[:6000]
         else:
             with open(file_path, "r", errors="ignore", encoding="utf-8") as f:
-                return f.read(15000)[:12000]
+                return f.read(8000)[:6000]
     except Exception as e:
-        return f"[File Reader Error: {e}]"
+        return f"[File Read Error: {e}]"
 
 # ==========================================
-# LEVEL 3: ARTIFACT & WORKSPACE EXTRACTORS
+# LEVEL 3 ARTIFACT EXTRACTOR
 # ==========================================
 def extract_artifacts(text):
-    """Extracts code blocks for live rendering in Level 3 workspace."""
     python_matches = re.findall(r"```python\s*(.*?)\s*```", text, re.DOTALL)
     html_matches = re.findall(r"```html\s*(.*?)\s*```", text, re.DOTALL)
     
@@ -217,73 +199,20 @@ def extract_artifacts(text):
     return python_code, html_code
 
 # ==========================================
-# LEVEL 1 & 2 ROUTER ENGINE
+# STREAMING & MODEL ROUTER ENGINE
 # ==========================================
-def run_autonomous_loop(messages, tokens, temp, max_iterations=4):
-    """Level 2 Agentic Tool Loop execution."""
-    iter_count = 0
-    trace_output = ""
-    
-    while iter_count < max_iterations:
-        iter_count += 1
-        try:
-            response = qwen_client.chat_completion(
-                messages=messages,
-                tools=TOOL_DEFINITIONS,
-                tool_choice="auto",
-                max_tokens=int(tokens),
-                temperature=float(temp)
-            )
-            msg_obj = response.choices[0].message
-            
-            if hasattr(msg_obj, "tool_calls") and msg_obj.tool_calls:
-                for tool_call in msg_obj.tool_calls:
-                    fn_name = tool_call.function.name
-                    try:
-                        args = json.loads(tool_call.function.arguments)
-                    except Exception:
-                        args = {}
-                    
-                    trace_output += f"🛠️ **Agent Action (Step {iter_count}):** Executing `{fn_name}` with `{args}`...\n\n"
-                    yield trace_output
-                    
-                    result = execute_tool_call(fn_name, args)
-                    
-                    messages.append({
-                        "role": "assistant",
-                        "content": None,
-                        "tool_calls": [{
-                            "id": tool_call.id,
-                            "type": "function",
-                            "function": {"name": fn_name, "arguments": json.dumps(args)}
-                        }]
-                    })
-                    messages.append({"role": "tool", "tool_call_id": tool_call.id, "content": str(result)})
-            else:
-                trace_output += (msg_obj.content or "")
-                yield trace_output
-                return
-        except Exception as e:
-            yield trace_output + f"\n⚠️ **Agent Loop Error:** {e}"
-            return
-
 def stream_model_response(model_choice, messages, temp, tokens):
-    if "Qwen" in model_choice:
-        for chunk in run_autonomous_loop(messages, tokens, temp):
-            yield chunk
-        return
-
-    elif "Gemini" in model_choice:
+    if "Gemini" in model_choice:
         current_gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
         if not current_gemini_key:
-            yield "⚠️ **Gemini Error:** `GEMINI_API_KEY` environment variable missing."
+            yield "⚠️ **Gemini Error:** `GEMINI_API_KEY` missing."
             return
         try:
             from google import genai
             g_client = genai.Client(api_key=current_gemini_key)
             formatted = [{"role": "user" if m["role"] == "user" else "model", "parts": [{"text": m["content"]}]} for m in messages if m["role"] != "system"]
             res = g_client.models.generate_content(model="gemini-1.5-flash", contents=formatted)
-            yield res.text or "[Response Complete]"
+            yield res.text or "[Done]"
             return
         except Exception as e:
             yield f"⚠️ **Gemini API Error:** {e}"
@@ -299,54 +228,33 @@ def stream_model_response(model_choice, messages, temp, tokens):
                 f"{ollama_host}/api/generate",
                 headers={"Authorization": f"Bearer {ollama_key}"},
                 json={"model": "llama3.2", "prompt": prompt_text, "stream": False},
-                timeout=30
+                timeout=15
             )
-            yield resp.json().get("response", "[No output from Ollama]")
+            yield resp.json().get("response", "[No response]")
             return
         except Exception as e:
             yield f"⚠️ **Ollama Error:** {e}"
             return
 
-    elif "DeepSeek" in model_choice:
+    else:
+        # Fast Streaming Qwen Engine
         try:
-            deepseek_client = InferenceClient(model="deepseek-ai/DeepSeek-R1-Distill-Qwen-32B", token=hf_token)
             full_res = ""
-            for token in deepseek_client.chat_completion(messages, max_tokens=int(tokens), temperature=float(temp), stream=True):
+            for token in qwen_client.chat_completion(messages, max_tokens=int(tokens), temperature=float(temp), stream=True):
                 chunk = token.choices[0].delta.content
                 if chunk:
                     full_res += chunk
                     yield full_res
             return
         except Exception as e:
-            yield f"⚠️ **DeepSeek Error:** {e}"
-            return
-
-    elif "GPT-4o" in model_choice:
-        if not openai_key:
-            yield "⚠️ **OpenAI Error:** `OPENAI_API_KEY` missing."
-            return
-        try:
-            import openai
-            client = openai.OpenAI(api_key=openai_key)
-            target = "gpt-4o" if "GPT-4o (OpenAI)" in model_choice else "gpt-4o-mini"
-            formatted = [{"role": m["role"], "content": m["content"] or ""} for m in messages if m["role"] in ["system", "user", "assistant"]]
-            stream = client.chat.completions.create(model=target, messages=formatted, temperature=float(temp), max_tokens=int(tokens), stream=True)
-            full_res = ""
-            for chunk in stream:
-                if chunk.choices and chunk.choices[0].delta.content:
-                    full_res += chunk.choices[0].delta.content
-                    yield full_res
-            return
-        except Exception as e:
-            yield f"⚠️ **OpenAI Error:** {e}"
+            yield f"⚠️ **Model Error:** {e}"
 
 # ==========================================
-# COMBINED GRADIO WORKSPACE UI (LEVEL 1 + 2 + 3)
+# OPTIMIZED GRADIO UI
 # ==========================================
 DEFAULT_SYSTEM_PROMPT = (
-    "You are Thunder AI, a fully autonomous multi-modal agent (Level 1+2+3). "
-    "You can execute live web searches, run Python code, generate FLUX images, "
-    "and create live HTML/JS web artifacts that render dynamically in the preview workspace."
+    "You are Thunder AI. Generate direct, accurate responses and code snippets. "
+    "When asked to write HTML or Web UI, format it inside ```html ... ``` blocks."
 )
 
 custom_css = """
@@ -356,11 +264,7 @@ body, .gradio-container {background-color: #0b0f19 !important;}
     background-color: #121826 !important;
     border: 1px solid #1f293d !important;
     border-radius: 12px !important;
-    padding: 14px !important;
-}
-.chatbot-container {
-    border: 1px solid #1f293d !important;
-    border-radius: 12px !important;
+    padding: 12px !important;
 }
 """
 
@@ -369,54 +273,53 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
     chat_state = gr.State([])
     file_context_state = gr.State("")
 
-    gr.Markdown("<center><h2 style='color:#22d3ee;'>⚡ THUNDER AI — UNIFIED PLATFORM (LEVEL 1, 2 & 3)</h2></center>")
+    gr.Markdown("<center><h2 style='color:#22d3ee;'>⚡ THUNDER AI — OPTIMIZED LEVEL 1, 2 & 3</h2></center>")
 
     with gr.Row():
-        # LEFT PANEL: Controls, Media Inputs & Models (Level 1)
+        # LEFT PANEL: Controls & Input
         with gr.Column(scale=3, elem_classes=["panel-card"]):
             session_selector = gr.Dropdown(choices=[], label="Workspace Session")
             new_session_btn = gr.Button("➕ New Workspace", size="sm")
             model_choice = gr.Dropdown(
                 choices=[
-                    "Qwen 2.5 7B (Autonomous Agent)",
+                    "Qwen 2.5 7B (Fast Stream)",
                     "Gemini 1.5 Flash",
                     "Ollama API",
-                    "DeepSeek R1 (Reasoning)",
-                    "GPT-4o (OpenAI)",
-                    "GPT-4o-mini (OpenAI)"
+                    "DeepSeek R1 (Reasoning)"
                 ],
-                value="Qwen 2.5 7B (Autonomous Agent)",
-                label="AI Core Model Engine"
+                value="Qwen 2.5 7B (Fast Stream)",
+                label="AI Core Model"
             )
-            system_prompt = gr.Textbox(value=DEFAULT_SYSTEM_PROMPT, label="System Instructions", lines=2)
+            system_prompt = gr.Textbox(value=DEFAULT_SYSTEM_PROMPT, label="System Directives", lines=2)
             temperature = gr.Slider(0.1, 1.5, value=0.7, label="Temperature")
-            max_tokens = gr.Slider(256, 4096, value=2048, label="Max Tokens")
+            max_tokens = gr.Slider(128, 2048, value=1024, label="Max Tokens")
             
-            file_input = gr.File(label="Attach Document (PDF/TXT)", file_count="single")
-            audio_input = gr.Audio(sources=["microphone"], type="filepath", label="Voice Input (Whisper)")
-            clear_btn = gr.Button("Reset Session", variant="stop")
+            file_input = gr.File(label="Attach File (PDF/TXT)", file_count="single")
+            # Fixed Mic configuration for mobile and web browsers
+            audio_input = gr.Audio(sources=["microphone", "upload"], type="filepath", label="🎙️ Voice Input (Microphone)")
+            clear_btn = gr.Button("Reset Chat", variant="stop")
 
-        # CENTER PANEL: Main Interactive Chat Engine
+        # CENTER PANEL: Chatbot
         with gr.Column(scale=5):
-            chatbot = gr.Chatbot(height=540, elem_classes=["chatbot-container"], type="messages")
+            chatbot = gr.Chatbot(height=520, type="messages")
             with gr.Row():
-                msg = gr.Textbox(placeholder="Message Thunder AI or ask 'generate an image of...' / 'build an HTML app...'", show_label=False, scale=9)
+                msg = gr.Textbox(placeholder="Ask anything, 'generate an image of...', or 'build an HTML app'...", show_label=False, scale=9)
                 send_btn = gr.Button("⚡ Run", variant="primary", scale=1)
 
-        # RIGHT PANEL: Level 3 Live Web Artifacts & Code Execution Sandbox
+        # RIGHT PANEL: Level 3 Interactive Workspace
         with gr.Column(scale=5, elem_classes=["panel-card"]):
-            gr.Markdown("### 🎨 Level 3 Live Artifacts & Sandbox Workspace")
+            gr.Markdown("### 🎨 Level 3 Interactive Artifact Workspace")
             
             with gr.Tabs():
-                with gr.TabItem("🌐 Live Web Artifact Preview"):
-                    html_preview = gr.HTML(value="<div style='color:#94a3b8; text-align:center; padding:20px;'>HTML/JS code generated by the AI will render live here.</div>")
+                with gr.TabItem("🌐 Live Web Preview"):
+                    html_preview = gr.HTML(value="<div style='color:#94a3b8; text-align:center; padding:20px;'>HTML preview renders here instantly.</div>")
                 
-                with gr.TabItem("🐍 Interactive Python Sandbox"):
-                    py_code_box = gr.Code(label="Extracted Python Code", language="python", lines=12)
-                    exec_py_btn = gr.Button("▶️ Run Python Code", variant="primary", size="sm")
-                    py_out_box = gr.Textbox(label="Execution Output", lines=5, interactive=False)
+                with gr.TabItem("🐍 Python Sandbox"):
+                    py_code_box = gr.Code(label="Extracted Python Code", language="python", lines=10)
+                    exec_py_btn = gr.Button("▶️ Run Code", variant="primary", size="sm")
+                    py_out_box = gr.Textbox(label="Output", lines=4, interactive=False)
 
-    # Session Database Callbacks
+    # Session Database Handlers
     def start_session():
         init_db()
         sessions = get_all_sessions()
@@ -440,7 +343,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
 
     new_session_btn.click(handle_new_session, None, [session_id, chatbot, chat_state, session_selector])
 
-    audio_input.change(lambda path: transcribe(path) if path else "", inputs=[audio_input], outputs=[msg])
+    audio_input.change(lambda path: transcribe_audio(path) if path else "", inputs=[audio_input], outputs=[msg])
     file_input.change(lambda file_obj: read_file(file_obj), inputs=[file_input], outputs=[file_context_state])
 
     def user_send(message, history, sid):
@@ -454,10 +357,9 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
 
         last_user_msg = history[-1]["content"].strip()
 
-        # Image Generation Handler (FLUX.1-schnell)
+        # Image Generation Intent Detection
         image_patterns = [
             r"generate\s+(?:an?\s+)?image\s+(?:of\s+)?(.*)",
-            r"generator\s+(?:a|an)\s+image\s+(?:of\s+)?(.*)",
             r"create\s+(?:an?\s+)?image\s+(?:of\s+)?(.*)",
             r"draw\s+(.*)"
         ]
@@ -470,14 +372,14 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
                 break
 
         if image_prompt:
-            history = history + [{"role": "assistant", "content": f"🎨 **Generating FLUX image for:** *\"{image_prompt}\"*..."}]
+            history = history + [{"role": "assistant", "content": f"🎨 **Generating image for:** *\"{image_prompt}\"*..."}]
             yield history, history, current_py, current_html
             
-            img_path, err = generate_image_flux(image_prompt)
+            base64_img, err = generate_image_flux_base64(image_prompt)
             if err:
-                history[-1]["content"] = f"⚠️ **Image Generation Failed:** {err}"
+                history[-1]["content"] = f"⚠️ **Image Generation Error:** {err}"
             else:
-                history[-1]["content"] = f"Here is your generated image:\n\n![{image_prompt}]({img_path})"
+                history[-1]["content"] = f"Here is your generated image:\n\n<img src='{base64_img}' style='max-width:100%; border-radius:8px;' />"
                 
             save_message(sid, "assistant", history[-1]["content"])
             yield history, history, current_py, current_html
@@ -498,7 +400,6 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
             full_text = chunk
             history[-1]["content"] = full_text
             
-            # Level 3 Extraction
             py_code, html_code = extract_artifacts(full_text)
             updated_py = py_code if py_code else current_py
             updated_html = html_code if html_code else current_html
@@ -523,4 +424,4 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
     clear_btn.click(lambda sid: (clear_session_history(sid), [], [])[1:], inputs=[session_id], outputs=[chatbot, chat_state])
 
 port_number = int(os.environ.get("PORT", 10000))
-demo.queue(default_concurrency_limit=4).launch(server_name="0.0.0.0", server_port=port_number)
+demo.queue(default_concurrency_limit=8).launch(server_name="0.0.0.0", server_port=port_number)
