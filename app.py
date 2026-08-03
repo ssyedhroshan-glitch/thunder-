@@ -9,55 +9,53 @@ import json
 import contextlib
 import requests
 
-# --- GRADIO SCHEMA BUG PATCH ---
+# ==========================================
+# GRADIO SCHEMA BUG PATCH
+# ==========================================
 import gradio_client.utils as _gc_utils
 
 _original_get_type = _gc_utils.get_type
 def _patched_get_type(schema):
-    if isinstance(schema, bool):
-        return "Any"
+    if isinstance(schema, bool): return "Any"
     return _original_get_type(schema)
 _gc_utils.get_type = _patched_get_type
 
 _original_json_schema_to_python_type = _gc_utils._json_schema_to_python_type
 def _patched_json_schema_to_python_type(schema, defs=None):
-    if isinstance(schema, bool):
-        return "Any"
+    if isinstance(schema, bool): return "Any"
     return _original_json_schema_to_python_type(schema, defs)
 _gc_utils._json_schema_to_python_type = _patched_json_schema_to_python_type
-# --- END PATCH ---
 
 import gradio as gr
 from huggingface_hub import InferenceClient
 
-# Environment Variables
+# ==========================================
+# ENVIRONMENT & CLIENT CONFIGURATION
+# ==========================================
 hf_token = os.environ.get("HF_TOKEN")
 openai_key = os.environ.get("OPENAI_API_KEY")
 gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
 ollama_key = os.environ.get("OLLAMA_API_KEY")
 ollama_host = os.environ.get("OLLAMA_HOST", "https://ollama.com")
 
-# Initialize Hugging Face Clients
+DB_PATH = "thunder_memory.db"
+
+# Model Clients (Level 1)
 qwen_client = InferenceClient(model="Qwen/Qwen2.5-7B-Instruct", token=hf_token) if hf_token else InferenceClient(model="Qwen/Qwen2.5-7B-Instruct")
 whisper_client = InferenceClient(model="openai/whisper-large-v3", token=hf_token) if hf_token else InferenceClient(model="openai/whisper-large-v3")
 
-DB_PATH = "thunder_memory.db"
-
 # ==========================================
-# 1. AUTONOMOUS TOOL DEFINITIONS & EXECUTION
+# LEVEL 2: AUTONOMOUS TOOL DEFINITIONS
 # ==========================================
-
 TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": "Perform live web searches to look up real-time information, news, or documentation.",
+            "description": "Perform live internet search queries to retrieve up-to-date knowledge.",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "The search query."}
-                },
+                "properties": {"query": {"type": "string", "description": "Search query."}},
                 "required": ["query"]
             }
         }
@@ -66,12 +64,10 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "execute_python",
-            "description": "Execute Python code in an isolated environment to handle math, logic, or calculations.",
+            "description": "Execute Python code safely in an isolated environment for math or data processing.",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "code": {"type": "string", "description": "Valid Python code snippet."}
-                },
+                "properties": {"code": {"type": "string", "description": "Valid Python code string."}},
                 "required": ["code"]
             }
         }
@@ -80,12 +76,10 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "scrape_url",
-            "description": "Fetch text content from a web URL for analysis.",
+            "description": "Fetch and extract text content from a public web URL.",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "url": {"type": "string", "description": "Target web URL."}
-                },
+                "properties": {"url": {"type": "string", "description": "Target webpage URL."}},
                 "required": ["url"]
             }
         }
@@ -97,14 +91,10 @@ def tool_web_search(query: str):
         from duckduckgo_search import DDGS
         with DDGS() as ddgs:
             results = list(ddgs.text(query, max_results=4))
-        if not results:
-            return "No relevant search results found."
-        formatted = []
-        for r in results:
-            formatted.append(f"Title: {r.get('title')}\nURL: {r.get('href')}\nSnippet: {r.get('body')}\n")
-        return "\n---\n".join(formatted)
+        if not results: return "No web results found."
+        return "\n---\n".join([f"Title: {r.get('title')}\nURL: {r.get('href')}\nSnippet: {r.get('body')}" for r in results])
     except Exception as e:
-        return f"Search execution error: {e}"
+        return f"Web Search Error: {e}"
 
 def tool_execute_python(code: str):
     output_buffer = io.StringIO()
@@ -123,50 +113,26 @@ def tool_scrape_url(url: str):
         resp = requests.get(url, headers=headers, timeout=10)
         resp.raise_for_status()
         text = re.sub(r'<[^>]+>', ' ', resp.text)
-        text = ' '.join(text.split())
-        return text[:4000] if text else "No printable text content found."
+        return ' '.join(text.split())[:4000]
     except Exception as e:
         return f"Scraping Error: {e}"
 
 def execute_tool_call(tool_name, arguments):
-    if tool_name == "web_search":
-        return tool_web_search(arguments.get("query", ""))
-    elif tool_name == "execute_python":
-        return tool_execute_python(arguments.get("code", ""))
-    elif tool_name == "scrape_url":
-        return tool_scrape_url(arguments.get("url", ""))
-    else:
-        return f"Unknown tool: {tool_name}"
-
+    if tool_name == "web_search": return tool_web_search(arguments.get("query", ""))
+    elif tool_name == "execute_python": return tool_execute_python(arguments.get("code", ""))
+    elif tool_name == "scrape_url": return tool_scrape_url(arguments.get("url", ""))
+    return f"Unknown tool: {tool_name}"
 
 # ==========================================
-# 2. PERSISTENT SQL DATABASE ENGINE
+# LEVEL 1: SQL PERSISTENCE & MEDIA ENGINES
 # ==========================================
 def init_db():
     conn = sqlite3.connect(DB_PATH)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS sessions (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id TEXT NOT NULL,
-            role TEXT NOT NULL,
-            content TEXT NOT NULL,
-            FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
-        )
-    """)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_session ON history(session_id)")
-
+    conn.execute("CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, name TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
+    conn.execute("CREATE TABLE IF NOT EXISTS history (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, role TEXT, content TEXT)")
     cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM sessions")
-    if cursor.fetchone()[0] == 0:
-        default_id = str(uuid.uuid4())
-        cursor.execute("INSERT INTO sessions (id, name) VALUES (?, ?)", (default_id, "Default Workspace"))
+    if cursor.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 0:
+        cursor.execute("INSERT INTO sessions (id, name) VALUES (?, ?)", (str(uuid.uuid4()), "Default Workspace"))
     conn.commit()
     conn.close()
 
@@ -204,22 +170,7 @@ def load_history(session_id):
 
 init_db()
 
-DEFAULT_SYSTEM_PROMPT = (
-    "You are Thunder AI, an elite multi-modal assistant and autonomous agent platform. "
-    "You can answer questions, reason through code, execute Python, and generate detailed visual imagery."
-)
-
-# ==========================================
-# 3. HELPER FUNCTIONS (WHISPER, PDF, IMAGE)
-# ==========================================
-def extract_python_code(text):
-    matches = re.findall(r"```python\s*(.*?)\s*```", text, re.DOTALL)
-    if matches:
-        return matches[-1].strip()
-    return None
-
 def generate_image_flux(prompt: str):
-    """Generates images using FLUX.1-schnell via Hugging Face Client."""
     try:
         flux_client = InferenceClient(model="black-forest-labs/FLUX.1-schnell", token=hf_token)
         image_obj = flux_client.text_to_image(prompt)
@@ -245,129 +196,36 @@ def read_file(file_obj):
         if ext == ".pdf":
             from pypdf import PdfReader
             reader = PdfReader(file_path)
-            text = "\n".join((page.extract_text() or "") for i, page in enumerate(reader.pages) if i < 15)
+            return "\n".join((page.extract_text() or "") for i, page in enumerate(reader.pages) if i < 15)[:12000]
         else:
             with open(file_path, "r", errors="ignore", encoding="utf-8") as f:
-                text = f.read(15000)
-        return text[:12000]
+                return f.read(15000)[:12000]
     except Exception as e:
-        return f"[File Parsing Error: {e}]"
-
+        return f"[File Reader Error: {e}]"
 
 # ==========================================
-# 4. MULTI-MODEL ROUTER
+# LEVEL 3: ARTIFACT & WORKSPACE EXTRACTORS
 # ==========================================
-def stream_model_response(model_choice, messages, temp, tokens):
-    # --- OPENAI HANDLER ---
-    if "GPT-4o" in model_choice:
-        if not os.environ.get("OPENAI_API_KEY"):
-            yield "⚠️ **OpenAI Error:** `OPENAI_API_KEY` environment variable is not configured on Render."
-            return
-        try:
-            import openai
-            client = openai.OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-            target_model = "gpt-4o" if "GPT-4o (OpenAI)" in model_choice else "gpt-4o-mini"
-            
-            formatted_messages = []
-            for m in messages:
-                if m["role"] in ["system", "user", "assistant"]:
-                    formatted_messages.append({"role": m["role"], "content": m["content"] or ""})
+def extract_artifacts(text):
+    """Extracts code blocks for live rendering in Level 3 workspace."""
+    python_matches = re.findall(r"```python\s*(.*?)\s*```", text, re.DOTALL)
+    html_matches = re.findall(r"```html\s*(.*?)\s*```", text, re.DOTALL)
+    
+    python_code = python_matches[-1].strip() if python_matches else None
+    html_code = html_matches[-1].strip() if html_matches else None
+    
+    return python_code, html_code
 
-            response = client.chat.completions.create(
-                model=target_model,
-                messages=formatted_messages,
-                temperature=float(temp),
-                max_tokens=int(tokens),
-                stream=True
-            )
-            full_res = ""
-            for chunk in response:
-                if chunk.choices and chunk.choices[0].delta.content:
-                    full_res += chunk.choices[0].delta.content
-                    yield full_res
-            return
-        except Exception as e:
-            yield f"⚠️ **OpenAI API Error:** {e}"
-            return
-
-    # --- GEMINI HANDLER ---
-    elif model_choice == "Gemini 1.5 Flash":
-        current_gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-        if not current_gemini_key:
-            yield "⚠️ **Gemini Error:** `GEMINI_API_KEY` is not set in Render environment variables."
-            return
-        
-        # Method 1: New google-genai SDK
-        try:
-            from google import genai
-            g_client = genai.Client(api_key=current_gemini_key)
-            
-            system_instr = messages[0]["content"] if messages and messages[0]["role"] == "system" else ""
-            user_contents = []
-            for m in messages:
-                if m["role"] != "system":
-                    user_contents.append({"role": "user" if m["role"] == "user" else "model", "parts": [{"text": m["content"]}]})
-
-            resp = g_client.models.generate_content(
-                model="gemini-1.5-flash",
-                contents=user_contents,
-                config={"system_instruction": system_instr, "temperature": float(temp), "max_output_tokens": int(tokens)}
-            )
-            yield resp.text or "[Response completed]"
-            return
-        except Exception as err1:
-            # Method 2: Legacy google.generativeai SDK fallback
-            try:
-                import google.generativeai as legacy_genai
-                legacy_genai.configure(api_key=current_gemini_key)
-                gen_model = legacy_genai.GenerativeModel("gemini-1.5-flash")
-                prompt_text = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in messages])
-                res = gen_model.generate_content(prompt_text)
-                yield res.text
-                return
-            except Exception as err2:
-                yield f"⚠️ **Gemini API Error:** {err1} | {err2}"
-                return
-
-    # --- OLLAMA API HANDLER ---
-    elif model_choice == "Ollama API":
-        if not ollama_key:
-            yield "⚠️ **Ollama Error:** `OLLAMA_API_KEY` is not set in Render environment variables."
-            return
-        try:
-            prompt_text = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in messages])
-            resp = requests.post(
-                f"{ollama_host}/api/generate",
-                headers={"Authorization": f"Bearer {ollama_key}", "Content-Type": "application/json"},
-                json={"model": "llama3.2", "prompt": prompt_text, "stream": False},
-                timeout=30
-            )
-            if resp.status_code == 200:
-                yield resp.json().get("response", "[No output from Ollama]")
-            else:
-                yield f"⚠️ **Ollama HTTP Error {resp.status_code}:** {resp.text}"
-            return
-        except Exception as e:
-            yield f"⚠️ **Ollama Connection Error:** {e}"
-            return
-
-    # --- DEEPSEEK R1 REASONING HANDLER ---
-    elif model_choice == "DeepSeek R1 (Reasoning)":
-        try:
-            deepseek_client = InferenceClient(model="deepseek-ai/DeepSeek-R1-Distill-Qwen-32B", token=hf_token)
-            full_res = ""
-            for token in deepseek_client.chat_completion(messages, max_tokens=int(tokens), temperature=float(temp), stream=True):
-                chunk = token.choices[0].delta.content
-                if chunk:
-                    full_res += chunk
-                    yield full_res
-            return
-        except Exception as e:
-            yield f"⚠️ **DeepSeek R1 Error:** {e}"
-            return
-
-    # --- QWEN AUTONOMOUS AGENT HANDLER ---
-    else:
+# ==========================================
+# LEVEL 1 & 2 ROUTER ENGINE
+# ==========================================
+def run_autonomous_loop(messages, tokens, temp, max_iterations=4):
+    """Level 2 Agentic Tool Loop execution."""
+    iter_count = 0
+    trace_output = ""
+    
+    while iter_count < max_iterations:
+        iter_count += 1
         try:
             response = qwen_client.chat_completion(
                 messages=messages,
@@ -376,17 +234,20 @@ def stream_model_response(model_choice, messages, temp, tokens):
                 max_tokens=int(tokens),
                 temperature=float(temp)
             )
-            message_obj = response.choices[0].message
+            msg_obj = response.choices[0].message
             
-            if hasattr(message_obj, "tool_calls") and message_obj.tool_calls:
-                for tool_call in message_obj.tool_calls:
+            if hasattr(msg_obj, "tool_calls") and msg_obj.tool_calls:
+                for tool_call in msg_obj.tool_calls:
                     fn_name = tool_call.function.name
                     try:
                         args = json.loads(tool_call.function.arguments)
                     except Exception:
                         args = {}
-                    yield f"🛠️ **Agent Action:** Running `{fn_name}` with arguments `{args}`...\n\n"
-                    tool_result = execute_tool_call(fn_name, args)
+                    
+                    trace_output += f"🛠️ **Agent Action (Step {iter_count}):** Executing `{fn_name}` with `{args}`...\n\n"
+                    yield trace_output
+                    
+                    result = execute_tool_call(fn_name, args)
                     
                     messages.append({
                         "role": "assistant",
@@ -397,34 +258,97 @@ def stream_model_response(model_choice, messages, temp, tokens):
                             "function": {"name": fn_name, "arguments": json.dumps(args)}
                         }]
                     })
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "content": str(tool_result)
-                    })
-                
-                full_res = "### 📊 Tool Results & Output:\n"
-                for token in qwen_client.chat_completion(messages, max_tokens=int(tokens), temperature=float(temp), stream=True):
-                    chunk = token.choices[0].delta.content
-                    if chunk:
-                        full_res += chunk
-                        yield full_res
-                return
+                    messages.append({"role": "tool", "tool_call_id": tool_call.id, "content": str(result)})
             else:
-                yield message_obj.content or "[Completed]"
+                trace_output += (msg_obj.content or "")
+                yield trace_output
                 return
         except Exception as e:
+            yield trace_output + f"\n⚠️ **Agent Loop Error:** {e}"
+            return
+
+def stream_model_response(model_choice, messages, temp, tokens):
+    if "Qwen" in model_choice:
+        for chunk in run_autonomous_loop(messages, tokens, temp):
+            yield chunk
+        return
+
+    elif "Gemini" in model_choice:
+        current_gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        if not current_gemini_key:
+            yield "⚠️ **Gemini Error:** `GEMINI_API_KEY` environment variable missing."
+            return
+        try:
+            from google import genai
+            g_client = genai.Client(api_key=current_gemini_key)
+            formatted = [{"role": "user" if m["role"] == "user" else "model", "parts": [{"text": m["content"]}]} for m in messages if m["role"] != "system"]
+            res = g_client.models.generate_content(model="gemini-1.5-flash", contents=formatted)
+            yield res.text or "[Response Complete]"
+            return
+        except Exception as e:
+            yield f"⚠️ **Gemini API Error:** {e}"
+            return
+
+    elif "Ollama" in model_choice:
+        if not ollama_key:
+            yield "⚠️ **Ollama Error:** `OLLAMA_API_KEY` missing."
+            return
+        try:
+            prompt_text = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in messages])
+            resp = requests.post(
+                f"{ollama_host}/api/generate",
+                headers={"Authorization": f"Bearer {ollama_key}"},
+                json={"model": "llama3.2", "prompt": prompt_text, "stream": False},
+                timeout=30
+            )
+            yield resp.json().get("response", "[No output from Ollama]")
+            return
+        except Exception as e:
+            yield f"⚠️ **Ollama Error:** {e}"
+            return
+
+    elif "DeepSeek" in model_choice:
+        try:
+            deepseek_client = InferenceClient(model="deepseek-ai/DeepSeek-R1-Distill-Qwen-32B", token=hf_token)
             full_res = ""
-            for token in qwen_client.chat_completion(messages, max_tokens=int(tokens), temperature=float(temp), stream=True):
+            for token in deepseek_client.chat_completion(messages, max_tokens=int(tokens), temperature=float(temp), stream=True):
                 chunk = token.choices[0].delta.content
                 if chunk:
                     full_res += chunk
                     yield full_res
+            return
+        except Exception as e:
+            yield f"⚠️ **DeepSeek Error:** {e}"
+            return
 
+    elif "GPT-4o" in model_choice:
+        if not openai_key:
+            yield "⚠️ **OpenAI Error:** `OPENAI_API_KEY` missing."
+            return
+        try:
+            import openai
+            client = openai.OpenAI(api_key=openai_key)
+            target = "gpt-4o" if "GPT-4o (OpenAI)" in model_choice else "gpt-4o-mini"
+            formatted = [{"role": m["role"], "content": m["content"] or ""} for m in messages if m["role"] in ["system", "user", "assistant"]]
+            stream = client.chat.completions.create(model=target, messages=formatted, temperature=float(temp), max_tokens=int(tokens), stream=True)
+            full_res = ""
+            for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    full_res += chunk.choices[0].delta.content
+                    yield full_res
+            return
+        except Exception as e:
+            yield f"⚠️ **OpenAI Error:** {e}"
 
 # ==========================================
-# 5. GRADIO UI INTERFACE
+# COMBINED GRADIO WORKSPACE UI (LEVEL 1 + 2 + 3)
 # ==========================================
+DEFAULT_SYSTEM_PROMPT = (
+    "You are Thunder AI, a fully autonomous multi-modal agent (Level 1+2+3). "
+    "You can execute live web searches, run Python code, generate FLUX images, "
+    "and create live HTML/JS web artifacts that render dynamically in the preview workspace."
+)
+
 custom_css = """
 footer {visibility: hidden;}
 body, .gradio-container {background-color: #0b0f19 !important;}
@@ -441,19 +365,17 @@ body, .gradio-container {background-color: #0b0f19 !important;}
 """
 
 with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), css=custom_css) as demo:
-
     session_id = gr.State(None)
     chat_state = gr.State([])
     file_context_state = gr.State("")
 
-    gr.Markdown("<center><h2 style='color:#22d3ee; margin-bottom:5px;'>⚡ THUNDER ADVANCED AI PLATFORM</h2></center>")
+    gr.Markdown("<center><h2 style='color:#22d3ee;'>⚡ THUNDER AI — UNIFIED PLATFORM (LEVEL 1, 2 & 3)</h2></center>")
 
     with gr.Row():
-        # LEFT SIDEBAR: Workspace, Models, Files, Voice
-        with gr.Column(scale=4, elem_classes=["panel-card"]):
-            session_selector = gr.Dropdown(choices=[], label="Workspace Session", interactive=True)
+        # LEFT PANEL: Controls, Media Inputs & Models (Level 1)
+        with gr.Column(scale=3, elem_classes=["panel-card"]):
+            session_selector = gr.Dropdown(choices=[], label="Workspace Session")
             new_session_btn = gr.Button("➕ New Workspace", size="sm")
-            
             model_choice = gr.Dropdown(
                 choices=[
                     "Qwen 2.5 7B (Autonomous Agent)",
@@ -464,39 +386,43 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
                     "GPT-4o-mini (OpenAI)"
                 ],
                 value="Qwen 2.5 7B (Autonomous Agent)",
-                label="Select AI Model Engine"
+                label="AI Core Model Engine"
             )
             system_prompt = gr.Textbox(value=DEFAULT_SYSTEM_PROMPT, label="System Instructions", lines=2)
+            temperature = gr.Slider(0.1, 1.5, value=0.7, label="Temperature")
+            max_tokens = gr.Slider(256, 4096, value=2048, label="Max Tokens")
             
-            with gr.Row():
-                temperature = gr.Slider(0.1, 1.5, value=0.70, step=0.05, label="Temperature")
-                max_tokens = gr.Slider(256, 4096, value=1536, step=128, label="Max Tokens")
-
             file_input = gr.File(label="Attach Document (PDF/TXT)", file_count="single")
             audio_input = gr.Audio(sources=["microphone"], type="filepath", label="Voice Input (Whisper)")
-            clear_btn = gr.Button("Reset Chat", variant="stop")
+            clear_btn = gr.Button("Reset Session", variant="stop")
 
-        # CENTER: Main Chat Window
-        with gr.Column(scale=8):
-            chatbot = gr.Chatbot(height=520, elem_classes=["chatbot-container"], type="messages")
+        # CENTER PANEL: Main Interactive Chat Engine
+        with gr.Column(scale=5):
+            chatbot = gr.Chatbot(height=540, elem_classes=["chatbot-container"], type="messages")
             with gr.Row():
-                msg = gr.Textbox(placeholder="Message Thunder AI or ask 'generate an image of ...'", show_label=False, container=False, scale=9)
+                msg = gr.Textbox(placeholder="Message Thunder AI or ask 'generate an image of...' / 'build an HTML app...'", show_label=False, scale=9)
                 send_btn = gr.Button("⚡ Run", variant="primary", scale=1)
 
-        # RIGHT PANEL: Interactive Code Sandbox
+        # RIGHT PANEL: Level 3 Live Web Artifacts & Code Execution Sandbox
         with gr.Column(scale=5, elem_classes=["panel-card"]):
-            gr.Markdown("### 🛠️ Interactive Code Sandbox")
-            artifact_code = gr.Code(label="Python Code Sandbox", language="python", lines=12)
-            exec_btn = gr.Button("▶️ Execute Code", variant="primary", size="sm")
-            exec_output = gr.Textbox(label="Execution Output", lines=5, interactive=False)
+            gr.Markdown("### 🎨 Level 3 Live Artifacts & Sandbox Workspace")
+            
+            with gr.Tabs():
+                with gr.TabItem("🌐 Live Web Artifact Preview"):
+                    html_preview = gr.HTML(value="<div style='color:#94a3b8; text-align:center; padding:20px;'>HTML/JS code generated by the AI will render live here.</div>")
+                
+                with gr.TabItem("🐍 Interactive Python Sandbox"):
+                    py_code_box = gr.Code(label="Extracted Python Code", language="python", lines=12)
+                    exec_py_btn = gr.Button("▶️ Run Python Code", variant="primary", size="sm")
+                    py_out_box = gr.Textbox(label="Execution Output", lines=5, interactive=False)
 
+    # Session Database Callbacks
     def start_session():
         init_db()
         sessions = get_all_sessions()
         active_id = sessions[0][0] if sessions else create_new_session()
         hist = load_history(active_id)
-        choices = [(name, sid) for sid, name in sessions]
-        return active_id, hist, hist, gr.update(choices=choices, value=active_id)
+        return active_id, hist, hist, gr.update(choices=[(n, s) for s, n in sessions], value=active_id)
 
     demo.load(start_session, None, [session_id, chatbot, chat_state, session_selector])
 
@@ -510,8 +436,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
     def handle_new_session():
         new_id = create_new_session("New Workspace")
         sessions = get_all_sessions()
-        choices = [(name, sid) for sid, name in sessions]
-        return new_id, [], [], gr.update(choices=choices, value=new_id)
+        return new_id, [], [], gr.update(choices=[(n, s) for s, n in sessions], value=new_id)
 
     new_session_btn.click(handle_new_session, None, [session_id, chatbot, chat_state, session_selector])
 
@@ -524,18 +449,17 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
         save_message(sid, "user", message)
         return "", new_hist, new_hist
 
-    def bot_reply(history, sys_prompt, model_sel, temp, tokens, f_context, sid, current_code):
-        if not history: yield history, history, current_code; return
+    def bot_reply(history, sys_prompt, model_sel, temp, tokens, f_context, sid, current_py, current_html):
+        if not history: yield history, history, current_py, current_html; return
 
         last_user_msg = history[-1]["content"].strip()
 
-        # Image Generation Intent Detection
+        # Image Generation Handler (FLUX.1-schnell)
         image_patterns = [
             r"generate\s+(?:an?\s+)?image\s+(?:of\s+)?(.*)",
             r"generator\s+(?:a|an)\s+image\s+(?:of\s+)?(.*)",
             r"create\s+(?:an?\s+)?image\s+(?:of\s+)?(.*)",
-            r"draw\s+(.*)",
-            r"make\s+(?:an?\s+)?image\s+(?:of\s+)?(.*)"
+            r"draw\s+(.*)"
         ]
         
         image_prompt = None
@@ -546,8 +470,8 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
                 break
 
         if image_prompt:
-            history = history + [{"role": "assistant", "content": f"🎨 **Generating image for:** *\"{image_prompt}\"*..."}]
-            yield history, history, current_code
+            history = history + [{"role": "assistant", "content": f"🎨 **Generating FLUX image for:** *\"{image_prompt}\"*..."}]
+            yield history, history, current_py, current_html
             
             img_path, err = generate_image_flux(image_prompt)
             if err:
@@ -556,10 +480,10 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
                 history[-1]["content"] = f"Here is your generated image:\n\n![{image_prompt}]({img_path})"
                 
             save_message(sid, "assistant", history[-1]["content"])
-            yield history, history, current_code
+            yield history, history, current_py, current_html
             return
 
-        # Prepare System & Context Messages
+        # Prepare System Prompt & Document Context
         messages = [{"role": "system", "content": sys_prompt}]
         if f_context: 
             messages.append({"role": "system", "content": f"Document Context:\n{f_context}"})
@@ -574,26 +498,28 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
             full_text = chunk
             history[-1]["content"] = full_text
             
-            extracted_code = extract_python_code(full_text)
-            code_out = extracted_code if extracted_code else current_code
+            # Level 3 Extraction
+            py_code, html_code = extract_artifacts(full_text)
+            updated_py = py_code if py_code else current_py
+            updated_html = html_code if html_code else current_html
             
-            yield history, history, code_out
+            yield history, history, updated_py, updated_html
 
         save_message(sid, "assistant", full_text)
 
     msg.submit(user_send, [msg, chat_state, session_id], [msg, chatbot, chat_state]).then(
         bot_reply, 
-        [chat_state, system_prompt, model_choice, temperature, max_tokens, file_context_state, session_id, artifact_code], 
-        [chatbot, chat_state, artifact_code]
+        [chat_state, system_prompt, model_choice, temperature, max_tokens, file_context_state, session_id, py_code_box, html_preview], 
+        [chatbot, chat_state, py_code_box, html_preview]
     )
 
     send_btn.click(user_send, [msg, chat_state, session_id], [msg, chatbot, chat_state]).then(
         bot_reply, 
-        [chat_state, system_prompt, model_choice, temperature, max_tokens, file_context_state, session_id, artifact_code], 
-        [chatbot, chat_state, artifact_code]
+        [chat_state, system_prompt, model_choice, temperature, max_tokens, file_context_state, session_id, py_code_box, html_preview], 
+        [chatbot, chat_state, py_code_box, html_preview]
     )
 
-    exec_btn.click(tool_execute_python, inputs=[artifact_code], outputs=[exec_output])
+    exec_py_btn.click(tool_execute_python, inputs=[py_code_box], outputs=[py_out_box])
     clear_btn.click(lambda sid: (clear_session_history(sid), [], [])[1:], inputs=[session_id], outputs=[chatbot, chat_state])
 
 port_number = int(os.environ.get("PORT", 10000))
