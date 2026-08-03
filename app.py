@@ -18,13 +18,15 @@ import gradio_client.utils as _gc_utils
 
 _original_get_type = _gc_utils.get_type
 def _patched_get_type(schema):
-    if isinstance(schema, bool): return "Any"
+    if isinstance(schema, bool): 
+        return "Any"
     return _original_get_type(schema)
 _gc_utils.get_type = _patched_get_type
 
 _original_json_schema_to_python_type = _gc_utils._json_schema_to_python_type
 def _patched_json_schema_to_python_type(schema, defs=None):
-    if isinstance(schema, bool): return "Any"
+    if isinstance(schema, bool): 
+        return "Any"
     return _original_json_schema_to_python_type(schema, defs)
 _gc_utils._json_schema_to_python_type = _patched_json_schema_to_python_type
 
@@ -42,13 +44,18 @@ OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "https://ollama.com")
 
 DB_PATH = "thunder_v5_memory.db"
 
-# Resilient fast inference clients
-qwen_client = InferenceClient(model="Qwen/Qwen2.5-7B-Instruct", token=HF_TOKEN, timeout=20) if HF_TOKEN else InferenceClient(model="Qwen/Qwen2.5-7B-Instruct", timeout=20)
-whisper_client = InferenceClient(model="openai/whisper-large-v3", token=HF_TOKEN, timeout=20) if HF_TOKEN else InferenceClient(model="openai/whisper-large-v3", timeout=20)
-flux_client = InferenceClient(model="black-forest-labs/FLUX.1-schnell", token=HF_TOKEN, timeout=30) if HF_TOKEN else InferenceClient(model="black-forest-labs/FLUX.1-schnell", timeout=30)
+# Resilient inference clients
+if HF_TOKEN:
+    qwen_client = InferenceClient(model="Qwen/Qwen2.5-7B-Instruct", token=HF_TOKEN, timeout=20)
+    whisper_client = InferenceClient(model="openai/whisper-large-v3", token=HF_TOKEN, timeout=20)
+    flux_client = InferenceClient(model="black-forest-labs/FLUX.1-schnell", token=HF_TOKEN, timeout=30)
+else:
+    qwen_client = InferenceClient(model="Qwen/Qwen2.5-7B-Instruct", timeout=20)
+    whisper_client = InferenceClient(model="openai/whisper-large-v3", timeout=20)
+    flux_client = InferenceClient(model="black-forest-labs/FLUX.1-schnell", timeout=30)
 
 # ==========================================
-# 3. LEVEL 2: AUTONOMOUS TOOL DEFINITIONS
+# 3. AUTONOMOUS TOOL DEFINITIONS
 # ==========================================
 TOOL_DEFINITIONS = [
     {
@@ -94,7 +101,8 @@ def tool_web_search(query: str):
         from duckduckgo_search import DDGS
         with DDGS() as ddgs:
             results = list(ddgs.text(query, max_results=3))
-        if not results: return "No web results found."
+        if not results: 
+            return "No web results found."
         return "\n---\n".join([f"Title: {r.get('title')}\nURL: {r.get('href')}\nSnippet: {r.get('body')}" for r in results])
     except Exception as e:
         return f"Web Search Error: {e}"
@@ -121,13 +129,16 @@ def tool_scrape_url(url: str):
         return f"Scraping Error: {e}"
 
 def execute_tool_call(tool_name, arguments):
-    if tool_name == "web_search": return tool_web_search(arguments.get("query", ""))
-    elif tool_name == "execute_python": return tool_execute_python(arguments.get("code", ""))
-    elif tool_name == "scrape_url": return tool_scrape_url(arguments.get("url", ""))
+    if tool_name == "web_search": 
+        return tool_web_search(arguments.get("query", ""))
+    elif tool_name == "execute_python": 
+        return tool_execute_python(arguments.get("code", ""))
+    elif tool_name == "scrape_url": 
+        return tool_scrape_url(arguments.get("url", ""))
     return f"Unknown tool: {tool_name}"
 
 # ==========================================
-# 4. HIGH-PERFORMANCE DATABASE LAYER (INDEXED)
+# 4. HIGH-PERFORMANCE DATABASE LAYER
 # ==========================================
 def init_db():
     with sqlite3.connect(DB_PATH) as conn:
@@ -181,10 +192,9 @@ def load_history(session_id: str):
 init_db()
 
 # ==========================================
-# 5. FAST MEDIA & FILE ENGINES (BASE64 & WHISPER)
+# 5. FAST MEDIA & FILE ENGINES
 # ==========================================
-def generate_image_flux_base64(prompt: str) -> (str, str):
-    """Generates FLUX images directly into base64 data URIs for instant cross-device rendering."""
+def generate_image_flux_base64(prompt: str):
     try:
         image_obj = flux_client.text_to_image(prompt)
         buffered = io.BytesIO()
@@ -196,7 +206,8 @@ def generate_image_flux_base64(prompt: str) -> (str, str):
         return None, str(e)
 
 def transcribe_audio(audio_path):
-    if not audio_path: return ""
+    if not audio_path: 
+        return ""
     try:
         res = whisper_client.automatic_speech_recognition(audio_path)
         return res.get("text", "") if isinstance(res, dict) else str(res)
@@ -204,7 +215,8 @@ def transcribe_audio(audio_path):
         return f"[Voice Transcription Error: {e}]"
 
 def read_file(file_obj):
-    if file_obj is None: return ""
+    if file_obj is None: 
+        return ""
     try:
         file_path = file_obj.name if hasattr(file_obj, "name") else file_obj
         ext = os.path.splitext(file_path)[1].lower()
@@ -219,10 +231,9 @@ def read_file(file_obj):
         return f"[File Read Error: {e}]"
 
 # ==========================================
-# 6. LEVEL 3: ARTIFACT & WORKSPACE EXTRACTOR
+# 6. ARTIFACT & WORKSPACE EXTRACTOR
 # ==========================================
 def extract_artifacts(text):
-    """Extracts code blocks for live rendering in Level 3 workspace."""
     python_matches = re.findall(r"```python\s*(.*?)\s*```", text, re.DOTALL)
     html_matches = re.findall(r"```html\s*(.*?)\s*```", text, re.DOTALL)
     
@@ -235,7 +246,6 @@ def extract_artifacts(text):
 # 7. ROUTER ENGINE & AGENT LOOPS
 # ==========================================
 def run_autonomous_loop(messages, tokens, temp, max_iterations=3):
-    """Level 2 Agentic Tool Loop execution."""
     iter_count = 0
     trace_output = ""
     
@@ -384,7 +394,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", neutral_hue="slate"), cs
     chat_state = gr.State([])
     file_context_state = gr.State("")
 
-    gr.Markdown("<center><h2 class='accent-title'>⚡ THUNDER AI — UNIFIED PLATFORM (LEVELS 1-5)</h2></center>")
+    gr.Markdown("<center><h2 class='accent-title'>⚡ THUNDER AI — UNIFIED PLATFORM</h2></center>")
 
     with gr.Row():
         # LEFT PANEL: Controls, Multi-Modal Inputs & Model Selection
@@ -417,9 +427,9 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", neutral_hue="slate"), cs
                 msg = gr.Textbox(placeholder="Message Thunder AI, 'draw a sunset', or 'build an HTML app'...", show_label=False, scale=9)
                 send_btn = gr.Button("⚡ Run", variant="primary", scale=1)
 
-        # RIGHT PANEL: Level 3 Interactive Canvas & Code Execution Sandbox
+        # RIGHT PANEL: Interactive Canvas & Code Execution Sandbox
         with gr.Column(scale=5, elem_classes=["panel-card"]):
-            gr.Markdown("### 🎨 Level 3 Live Artifacts & Sandbox Canvas")
+            gr.Markdown("### 🎨 Live Artifacts & Sandbox Canvas")
             
             with gr.Tabs():
                 with gr.TabItem("🌐 Live Web App Canvas"):
@@ -430,18 +440,19 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", neutral_hue="slate"), cs
                     exec_py_btn = gr.Button("▶️ Run Code", variant="primary", size="sm")
                     py_out_box = gr.Textbox(label="Execution Output", lines=4, interactive=False)
 
-    # Session Handlers
+    # Session Database Handlers
     def start_session():
         init_db()
         sessions = get_all_sessions()
-        active_id = sessions[0][0]
+        active_id = sessions[0][0] if sessions else create_new_session()
         hist = load_history(active_id)
         return active_id, hist, hist, gr.update(choices=[(n, s) for s, n in sessions], value=active_id)
 
     demo.load(start_session, None, [session_id, chatbot, chat_state, session_selector])
 
     def switch_session(target_id):
-        if not target_id: return gr.update(), [], []
+        if not target_id: 
+            return gr.update(), [], []
         hist = load_history(target_id)
         return target_id, hist, hist
 
@@ -458,17 +469,20 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", neutral_hue="slate"), cs
     file_input.change(lambda file_obj: read_file(file_obj), inputs=[file_input], outputs=[file_context_state])
 
     def user_send(message, history, sid):
-        if not message.strip(): return "", history, history
+        if not message.strip(): 
+            return "", history, history
         new_hist = history + [{"role": "user", "content": message}]
         save_message(sid, "user", message)
         return "", new_hist, new_hist
 
-    def bot_reply(history, sys_prompt, model_sel, temp, tokens, f_context,sod,curre6_py, current _html):
-      if not history: yield history, history, current_py, current_html; return
+    def bot_reply(history, sys_prompt, model_sel, temp, tokens, f_context, sid, current_py, current_html):
+        if not history: 
+            yield history, history, current_py, current_html
+            return
 
         last_user_msg = history[-1]["content"].strip()
 
-        # Direct Image Generation Handler
+        # Image Generation Intent Detection
         image_patterns = [
             r"generate\s+(?:an?\s+)?image\s+(?:of\s+)?(.*)",
             r"create\s+(?:an?\s+)?image\s+(?:of\s+)?(.*)",
@@ -483,7 +497,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", neutral_hue="slate"), cs
                 break
 
         if image_prompt:
-            history = history + [{"role": "assistant", "content": f"🎨 **Rendering image for:** *\"{image_prompt}\"*..."}]
+            history = history + [{"role": "assistant", "content": f"🎨 **Generating image for:** *\"{image_prompt}\"*..."}]
             yield history, history, current_py, current_html
             
             html_img_block, err = generate_image_flux_base64(image_prompt)
@@ -496,7 +510,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", neutral_hue="slate"), cs
             yield history, history, current_py, current_html
             return
 
-        # Prepare System Directives & Attachments
+        # Prepare System Prompt & Document Context
         messages = [{"role": "system", "content": sys_prompt}]
         if f_context: 
             messages.append({"role": "system", "content": f"Document Context:\n{f_context}"})
@@ -535,4 +549,4 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", neutral_hue="slate"), cs
     clear_btn.click(lambda sid: (clear_session_history(sid), [], [])[1:], inputs=[session_id], outputs=[chatbot, chat_state])
 
 port_number = int(os.environ.get("PORT", 10000))
-demo.queue(default_concurrency_limit=10).launch(server_name="0.0.0.0", server_port=port_number)   
+demo.queue(default_concurrency_limit=10).launch(server_name="0.0.0.0", server_port=port_number)
