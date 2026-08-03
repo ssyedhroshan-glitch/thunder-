@@ -29,12 +29,15 @@ _gc_utils._json_schema_to_python_type = _patched_json_schema_to_python_type
 
 import gradio as gr
 from huggingface_hub import InferenceClient
+import openai
 
 hf_token = os.environ.get("HF_TOKEN")
+openai_key = os.environ.get("OPENAI_API_KEY")
 
 # Core Clients
 qwen_client = InferenceClient(model="Qwen/Qwen2.5-7B-Instruct", token=hf_token)
 whisper_client = InferenceClient(model="openai/whisper-large-v3", token=hf_token)
+openai_client = openai.OpenAI(api_key=openai_key) if openai_key else None
 
 DB_PATH = "thunder_memory.db"
 
@@ -124,7 +127,6 @@ def tool_scrape_url(url: str):
         return f"URL Scraping Error: {e}"
 
 def execute_tool_call(tool_name, arguments):
-    """Router for function calls."""
     if tool_name == "web_search":
         return tool_web_search(arguments.get("query", ""))
     elif tool_name == "execute_python":
@@ -201,38 +203,143 @@ def load_history(session_id):
 init_db()
 
 DEFAULT_SYSTEM_PROMPT = (
-    "You are Thunder AI, an autonomous multi-modal co-founder and AI platform. "
+    "You are Thunder AI, an elite multi-modal AI collaborator and autonomous agent platform. "
     "You have access to tools: web_search, execute_python, and scrape_url. "
-    "Use tools autonomously when you need factual information, exact code/math validation, or web scraping."
+    "When asked to generate code, wrap python blocks in standard ```python ``` fences."
 )
 
 # ==========================================
-# 3. AUTONOMOUS AGENT REASONING LOOP
+# 3. HELPER FUNCTIONS (WHISPER, PDF, IMAGE)
 # ==========================================
-def run_autonomous_agent(model_choice, messages, temp, max_tokens):
-    """
-    Executes an autonomous agent loop: 
-    Model -> Tool Call Request -> Execution -> Feedback Observation -> Final LLM Response.
-    """
-    max_loops = 3
-    current_loop = 0
+def extract_python_code(text):
+    matches = re.findall(r"```python\s*(.*?)\s*```", text, re.DOTALL)
+    if matches:
+        return matches[-1].strip()
+    return None
 
-    while current_loop < max_loops:
-        current_loop += 1
+def generate_image_flux(prompt: str):
+    try:
+        image_obj = qwen_client.text_to_image(
+            prompt=prompt,
+            model="black-forest-labs/FLUX.1-schnell"
+        )
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+        image_obj.save(tmp.name)
+        return tmp.name, None
+    except Exception as e:
+        return None, str(e)
+
+def transcribe(audio_path):
+    if not audio_path: return ""
+    try:
+        res = whisper_client.automatic_speech_recognition(audio_path)
+        return res.text if hasattr(res, "text") else str(res)
+    except Exception as e:
+        return f"[Transcription Error: {e}]"
+
+def read_file(file_obj):
+    if file_obj is None: return ""
+    try:
+        file_path = file_obj.name if hasattr(file_obj, "name") else file_obj
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext == ".pdf":
+            from pypdf import PdfReader
+            reader = PdfReader(file_path)
+            text = "\n".join((page.extract_text() or "") for i, page in enumerate(reader.pages) if i < 15)
+        else:
+            with open(file_path, "r", errors="ignore", encoding="utf-8") as f:
+                text = f.read(15000)
+        return text[:12000]
+    except Exception as e:
+        return f"[File Parsing Error: {e}]"
+
+
+# ==========================================
+# 4. MULTI-MODEL ROUTER & AGENT ENGINE
+# ==========================================
+def stream_model_response(model_choice, messages, temp, tokens):
+    # --- OPENAI HANDLER ---
+    if "GPT-4o" in model_choice:
+        if not openai_client:
+            yield "⚠️ **OpenAI Error:** `OPENAI_API_KEY` is not configured in Render environment variables."
+            return
         
-        # Call model with available tool definitions
+        target_model = "gpt-4o" if "GPT-4o (OpenAI)" in model_choice else "gpt-4o-mini"
+        
+        try:
+            formatted_messages = []
+            for m in messages:
+                if m["role"] in ["system", "user", "assistant"]:
+                    formatted_messages.append({"role": m["role"], "content": m["content"] or ""})
+
+            response = openai_client.chat.completions.create(
+                model=target_model,
+                messages=formatted_messages,
+                temperature=float(temp),
+                max_tokens=int(tokens),
+                stream=True
+            )
+            
+            full_res = ""
+            for chunk in response:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    full_res += chunk.choices[0].delta.content
+                    yield full_res
+            return
+        except Exception as e:
+            yield f"⚠️ **OpenAI API Error:** {e}"
+            return
+
+    # --- GEMINI HANDLER ---
+    elif model_choice == "Gemini 1.5 Flash":
+        gemini_key = os.environ.get("GEMINI_API_KEY")
+        if not gemini_key:
+            yield "⚠️ **Gemini Error:** `GEMINI_API_KEY` is missing in Render environment variables."
+            return
+        try:
+            from google import genai
+            client = genai.Client(api_key=gemini_key)
+            system_instr = messages[0]["content"] if messages and messages[0]["role"] == "system" else ""
+            contents = [{"role": "user" if m["role"] == "user" else "model", "parts": [{"text": m["content"]}]} for m in messages if m["role"] != "system"]
+
+            response = client.models.generate_content(
+                model="gemini-1.5-flash",
+                contents=contents,
+                config={"system_instruction": system_instr, "temperature": float(temp), "max_output_tokens": int(tokens)}
+            )
+            yield response.text or "[Empty Response]"
+            return
+        except Exception as e:
+            yield f"⚠️ **Gemini API Error:** {e}"
+            return
+
+    # --- DEEPSEEK R1 HANDLER ---
+    elif model_choice == "DeepSeek R1 (Reasoning)":
+        try:
+            deepseek_client = InferenceClient(model="deepseek-ai/DeepSeek-R1-Distill-Qwen-32B", token=hf_token)
+            full_res = ""
+            for token in deepseek_client.chat_completion(messages, max_tokens=int(tokens), temperature=float(temp), stream=True):
+                chunk = token.choices[0].delta.content
+                if chunk:
+                    full_res += chunk
+                    yield full_res
+            return
+        except Exception as e:
+            yield f"⚠️ **DeepSeek R1 Error:** {e}"
+            return
+
+    # --- QWEN AUTONOMOUS AGENT HANDLER ---
+    else:
         try:
             response = qwen_client.chat_completion(
                 messages=messages,
                 tools=TOOL_DEFINITIONS,
                 tool_choice="auto",
-                max_tokens=int(max_tokens),
+                max_tokens=int(tokens),
                 temperature=float(temp)
             )
-            
             message_obj = response.choices[0].message
             
-            # Check if model requested a tool call
             if hasattr(message_obj, "tool_calls") and message_obj.tool_calls:
                 for tool_call in message_obj.tool_calls:
                     fn_name = tool_call.function.name
@@ -240,13 +347,9 @@ def run_autonomous_agent(model_choice, messages, temp, max_tokens):
                         args = json.loads(tool_call.function.arguments)
                     except:
                         args = {}
-                        
-                    yield f"🛠️ **Agent Action:** Calling tool `{fn_name}` with args `{args}`...\n\n"
-                    
-                    # Execute tool
+                    yield f"🛠️ **Agent Action:** Executing tool `{fn_name}` with arguments `{args}`...\n\n"
                     tool_result = execute_tool_call(fn_name, args)
                     
-                    # Append tool response back to message history
                     messages.append({
                         "role": "assistant",
                         "content": None,
@@ -261,25 +364,28 @@ def run_autonomous_agent(model_choice, messages, temp, max_tokens):
                         "tool_call_id": tool_call.id,
                         "content": str(tool_result)
                     })
+                
+                full_res = "### 📊 Tool Results & Analysis:\n"
+                for token in qwen_client.chat_completion(messages, max_tokens=int(tokens), temperature=float(temp), stream=True):
+                    chunk = token.choices[0].delta.content
+                    if chunk:
+                        full_res += chunk
+                        yield full_res
+                return
             else:
-                # No tool needed; yield final text
                 yield message_obj.content or "[Completed]"
                 return
-
         except Exception as e:
-            # Fallback for models or API errors without strict tool compatibility
-            yield f"⚠️ Agent Loop Notice: Switching to direct inference mode ({e})...\n\n"
             full_res = ""
-            for token in qwen_client.chat_completion(messages, max_tokens=int(max_tokens), temperature=float(temp), stream=True):
+            for token in qwen_client.chat_completion(messages, max_tokens=int(tokens), temperature=float(temp), stream=True):
                 chunk = token.choices[0].delta.content
                 if chunk:
                     full_res += chunk
                     yield full_res
-            return
 
 
 # ==========================================
-# 4. GRADIO UI INTERFACE
+# 5. GRADIO UI INTERFACE
 # ==========================================
 custom_css = """
 footer {visibility: hidden;}
@@ -300,32 +406,50 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
 
     session_id = gr.State(None)
     chat_state = gr.State([])
+    file_context_state = gr.State("")
 
-    gr.Markdown("<center><h2 style='color:#22d3ee; margin-bottom:5px;'>⚡ THUNDER AI — LEVEL 2 AUTONOMOUS AGENT</h2></center>")
+    gr.Markdown("<center><h2 style='color:#22d3ee; margin-bottom:5px;'>⚡ THUNDER ADVANCED AI PLATFORM</h2></center>")
 
     with gr.Row():
+        # LEFT SIDEBAR: Workspace, Models, Files, Voice
         with gr.Column(scale=4, elem_classes=["panel-card"]):
             session_selector = gr.Dropdown(choices=[], label="Workspace Session", interactive=True)
             new_session_btn = gr.Button("➕ New Workspace", size="sm")
             
             model_choice = gr.Dropdown(
-                choices=["Qwen 2.5 7B Agent", "Gemini 1.5 Flash"],
-                value="Qwen 2.5 7B Agent",
+                choices=[
+                    "GPT-4o (OpenAI)",
+                    "GPT-4o-mini (OpenAI)",
+                    "Qwen 2.5 7B (Autonomous Agent)",
+                    "DeepSeek R1 (Reasoning)",
+                    "Gemini 1.5 Flash"
+                ],
+                value="GPT-4o (OpenAI)",
                 label="Select AI Model Engine"
             )
-            system_prompt = gr.Textbox(value=DEFAULT_SYSTEM_PROMPT, label="System Instructions", lines=3)
+            system_prompt = gr.Textbox(value=DEFAULT_SYSTEM_PROMPT, label="System Instructions", lines=2)
             
             with gr.Row():
                 temperature = gr.Slider(0.1, 1.5, value=0.70, step=0.05, label="Temperature")
                 max_tokens = gr.Slider(256, 4096, value=1536, step=128, label="Max Tokens")
 
+            file_input = gr.File(label="Attach Document (PDF/TXT)", file_count="single")
+            audio_input = gr.Audio(sources=["microphone"], type="filepath", label="Voice Input (Whisper)")
             clear_btn = gr.Button("Reset Chat", variant="stop")
 
+        # CENTER: Main Chat Window
         with gr.Column(scale=8):
-            chatbot = gr.Chatbot(height=560, elem_classes=["chatbot-container"], type="messages")
+            chatbot = gr.Chatbot(height=520, elem_classes=["chatbot-container"], type="messages")
             with gr.Row():
-                msg = gr.Textbox(placeholder="Ask Thunder AI anything or give it a complex multi-step task...", show_label=False, container=False, scale=9)
-                send_btn = gr.Button("⚡ Run Agent", variant="primary", scale=1)
+                msg = gr.Textbox(placeholder="Message Thunder AI or ask to generate an image...", show_label=False, container=False, scale=9)
+                send_btn = gr.Button("⚡ Run", variant="primary", scale=1)
+
+        # RIGHT PANEL: Interactive Code Sandbox
+        with gr.Column(scale=5, elem_classes=["panel-card"]):
+            gr.Markdown("### 🛠️ Interactive Code Sandbox")
+            artifact_code = gr.Code(label="Python Code Sandbox", language="python", lines=12)
+            exec_btn = gr.Button("▶️ Execute Code", variant="primary", size="sm")
+            exec_output = gr.Textbox(label="Execution Output", lines=5, interactive=False)
 
     def start_session():
         init_db()
@@ -352,43 +476,41 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
 
     new_session_btn.click(handle_new_session, None, [session_id, chatbot, chat_state, session_selector])
 
+    audio_input.change(lambda path: transcribe(path) if path else "", inputs=[audio_input], outputs=[msg])
+    file_input.change(lambda file_obj: read_file(file_obj), inputs=[file_input], outputs=[file_context_state])
+
     def user_send(message, history, sid):
         if not message.strip(): return "", history, history
         new_hist = history + [{"role": "user", "content": message}]
         save_message(sid, "user", message)
         return "", new_hist, new_hist
 
-    def bot_agent_reply(history, sys_prompt, model_sel, temp, tokens, sid):
-        if not history: yield history, history; return
+    def bot_reply(history, sys_prompt, model_sel, temp, tokens, f_context, sid, current_code):
+        if not history: yield history, history, current_code; return
 
-        messages = [{"role": "system", "content": sys_prompt}]
-        for msg_item in history:
-            messages.append({"role": msg_item["role"], "content": msg_item["content"]})
+        last_user_msg = history[-1]["content"].strip()
 
-        history = history + [{"role": "assistant", "content": ""}]
+        # Image Generation Handler
+        image_patterns = [
+            r"generate an image of\s+(.*)",
+            r"create an image of\s+(.*)",
+            r"draw\s+(.*)",
+            r"make an image of\s+(.*)"
+        ]
+        
+        image_prompt = None
+        for pattern in image_patterns:
+            match = re.search(pattern, last_user_msg, re.IGNORECASE)
+            if match:
+                image_prompt = match.group(1).strip()
+                break
 
-        accumulated_text = ""
-        for agent_step in run_autonomous_agent(model_sel, messages, temp, tokens):
-            accumulated_text += agent_step
-            history[-1]["content"] = accumulated_text
-            yield history, history
-
-        save_message(sid, "assistant", accumulated_text)
-
-    msg.submit(user_send, [msg, chat_state, session_id], [msg, chatbot, chat_state]).then(
-        bot_agent_reply, 
-        [chat_state, system_prompt, model_choice, temperature, max_tokens, session_id], 
-        [chatbot, chat_state]
-    )
-
-    send_btn.click(user_send, [msg, chat_state, session_id], [msg, chatbot, chat_state]).then(
-        bot_agent_reply, 
-        [chat_state, system_prompt, model_choice, temperature, max_tokens, session_id], 
-        [chatbot, chat_state]
-    )
-
-    clear_btn.click(lambda sid: (clear_session_history(sid), [], [])[1:], inputs=[session_id], outputs=[chatbot, chat_state])
-
-port_number = int(os.environ.get("PORT", 10000))
-demo.queue(default_concurrency_limit=4).launch(server_name="0.0.0.0", server_port=port_number)
-                       
+        if image_prompt:
+            history = history + [{"role": "assistant", "content": f"🎨 **Generating image using FLUX.1-schnell...**\n*Prompt:* \"{image_prompt}\""}]
+            yield history, history, current_code
+            
+            img_path, err = generate_image_flux(image_prompt)
+            if err:
+                history[-1]["content"] = f"⚠️ **Image Generation Failed:** {err}"
+            else:
+                history[-1]["co
