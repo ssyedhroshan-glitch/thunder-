@@ -29,15 +29,17 @@ _gc_utils._json_schema_to_python_type = _patched_json_schema_to_python_type
 
 import gradio as gr
 from huggingface_hub import InferenceClient
-import openai
 
+# Environment Variables
 hf_token = os.environ.get("HF_TOKEN")
 openai_key = os.environ.get("OPENAI_API_KEY")
+gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+ollama_key = os.environ.get("OLLAMA_API_KEY")
+ollama_host = os.environ.get("OLLAMA_HOST", "https://ollama.com")
 
-# Core Clients
-qwen_client = InferenceClient(model="Qwen/Qwen2.5-7B-Instruct", token=hf_token)
-whisper_client = InferenceClient(model="openai/whisper-large-v3", token=hf_token)
-openai_client = openai.OpenAI(api_key=openai_key) if openai_key else None
+# Initialize Hugging Face Clients
+qwen_client = InferenceClient(model="Qwen/Qwen2.5-7B-Instruct", token=hf_token) if hf_token else InferenceClient(model="Qwen/Qwen2.5-7B-Instruct")
+whisper_client = InferenceClient(model="openai/whisper-large-v3", token=hf_token) if hf_token else InferenceClient(model="openai/whisper-large-v3")
 
 DB_PATH = "thunder_memory.db"
 
@@ -50,7 +52,7 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": "Perform live web searches to look up up-to-date facts, news, documentation, or real-time information.",
+            "description": "Perform live web searches to look up real-time information, news, or documentation.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -64,11 +66,11 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "execute_python",
-            "description": "Run Python code in an isolated environment to perform math, data calculations, logic, or algorithmic problem-solving.",
+            "description": "Execute Python code in an isolated environment to handle math, logic, or calculations.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "code": {"type": "string", "description": "Valid Python code snippet to execute."}
+                    "code": {"type": "string", "description": "Valid Python code snippet."}
                 },
                 "required": ["code"]
             }
@@ -78,11 +80,11 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "scrape_url",
-            "description": "Scrape and read raw text content from a given web URL for in-depth analysis.",
+            "description": "Fetch text content from a web URL for analysis.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "url": {"type": "string", "description": "The target website URL starting with http:// or https://"}
+                    "url": {"type": "string", "description": "Target web URL."}
                 },
                 "required": ["url"]
             }
@@ -117,14 +119,14 @@ def tool_execute_python(code: str):
 
 def tool_scrape_url(url: str):
     try:
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        headers = {"User-Agent": "Mozilla/5.0"}
         resp = requests.get(url, headers=headers, timeout=10)
         resp.raise_for_status()
         text = re.sub(r'<[^>]+>', ' ', resp.text)
         text = ' '.join(text.split())
-        return text[:4000] if text else "Page loaded but no text content found."
+        return text[:4000] if text else "No printable text content found."
     except Exception as e:
-        return f"URL Scraping Error: {e}"
+        return f"Scraping Error: {e}"
 
 def execute_tool_call(tool_name, arguments):
     if tool_name == "web_search":
@@ -184,7 +186,7 @@ def create_new_session(name="New Workspace"):
 
 def save_message(session_id, role, content):
     conn = sqlite3.connect(DB_PATH)
-    conn.execute("INSERT INTO history (session_id, role, content) VALUES (?, ?, ?)", (session_id, role, content))
+    conn.execute("INSERT INTO history (session_id, role, content) VALUES (?, ?, ?)", (session_id, role, str(content)))
     conn.commit()
     conn.close()
 
@@ -203,9 +205,8 @@ def load_history(session_id):
 init_db()
 
 DEFAULT_SYSTEM_PROMPT = (
-    "You are Thunder AI, an elite multi-modal AI collaborator and autonomous agent platform. "
-    "You have access to tools: web_search, execute_python, and scrape_url. "
-    "When asked to generate code, wrap python blocks in standard ```python ``` fences."
+    "You are Thunder AI, an elite multi-modal assistant and autonomous agent platform. "
+    "You can answer questions, reason through code, execute Python, and generate detailed visual imagery."
 )
 
 # ==========================================
@@ -218,11 +219,10 @@ def extract_python_code(text):
     return None
 
 def generate_image_flux(prompt: str):
+    """Generates images using FLUX.1-schnell via Hugging Face Client."""
     try:
-        image_obj = qwen_client.text_to_image(
-            prompt=prompt,
-            model="black-forest-labs/FLUX.1-schnell"
-        )
+        flux_client = InferenceClient(model="black-forest-labs/FLUX.1-schnell", token=hf_token)
+        image_obj = flux_client.text_to_image(prompt)
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
         image_obj.save(tmp.name)
         return tmp.name, None
@@ -255,31 +255,31 @@ def read_file(file_obj):
 
 
 # ==========================================
-# 4. MULTI-MODEL ROUTER & AGENT ENGINE
+# 4. MULTI-MODEL ROUTER
 # ==========================================
 def stream_model_response(model_choice, messages, temp, tokens):
     # --- OPENAI HANDLER ---
     if "GPT-4o" in model_choice:
-        if not openai_client:
-            yield "⚠️ **OpenAI Error:** `OPENAI_API_KEY` is not configured in Render environment variables."
+        if not os.environ.get("OPENAI_API_KEY"):
+            yield "⚠️ **OpenAI Error:** `OPENAI_API_KEY` environment variable is not configured on Render."
             return
-        
-        target_model = "gpt-4o" if "GPT-4o (OpenAI)" in model_choice else "gpt-4o-mini"
-        
         try:
+            import openai
+            client = openai.OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+            target_model = "gpt-4o" if "GPT-4o (OpenAI)" in model_choice else "gpt-4o-mini"
+            
             formatted_messages = []
             for m in messages:
                 if m["role"] in ["system", "user", "assistant"]:
                     formatted_messages.append({"role": m["role"], "content": m["content"] or ""})
 
-            response = openai_client.chat.completions.create(
+            response = client.chat.completions.create(
                 model=target_model,
                 messages=formatted_messages,
                 temperature=float(temp),
                 max_tokens=int(tokens),
                 stream=True
             )
-            
             full_res = ""
             for chunk in response:
                 if chunk.choices and chunk.choices[0].delta.content:
@@ -292,28 +292,66 @@ def stream_model_response(model_choice, messages, temp, tokens):
 
     # --- GEMINI HANDLER ---
     elif model_choice == "Gemini 1.5 Flash":
-        gemini_key = os.environ.get("GEMINI_API_KEY")
-        if not gemini_key:
-            yield "⚠️ **Gemini Error:** `GEMINI_API_KEY` is missing in Render environment variables."
+        current_gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        if not current_gemini_key:
+            yield "⚠️ **Gemini Error:** `GEMINI_API_KEY` is not set in Render environment variables."
             return
+        
+        # Method 1: New google-genai SDK
         try:
             from google import genai
-            client = genai.Client(api_key=gemini_key)
+            g_client = genai.Client(api_key=current_gemini_key)
+            
             system_instr = messages[0]["content"] if messages and messages[0]["role"] == "system" else ""
-            contents = [{"role": "user" if m["role"] == "user" else "model", "parts": [{"text": m["content"]}]} for m in messages if m["role"] != "system"]
+            user_contents = []
+            for m in messages:
+                if m["role"] != "system":
+                    user_contents.append({"role": "user" if m["role"] == "user" else "model", "parts": [{"text": m["content"]}]})
 
-            response = client.models.generate_content(
+            resp = g_client.models.generate_content(
                 model="gemini-1.5-flash",
-                contents=contents,
+                contents=user_contents,
                 config={"system_instruction": system_instr, "temperature": float(temp), "max_output_tokens": int(tokens)}
             )
-            yield response.text or "[Empty Response]"
+            yield resp.text or "[Response completed]"
+            return
+        except Exception as err1:
+            # Method 2: Legacy google.generativeai SDK fallback
+            try:
+                import google.generativeai as legacy_genai
+                legacy_genai.configure(api_key=current_gemini_key)
+                gen_model = legacy_genai.GenerativeModel("gemini-1.5-flash")
+                prompt_text = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in messages])
+                res = gen_model.generate_content(prompt_text)
+                yield res.text
+                return
+            except Exception as err2:
+                yield f"⚠️ **Gemini API Error:** {err1} | {err2}"
+                return
+
+    # --- OLLAMA API HANDLER ---
+    elif model_choice == "Ollama API":
+        if not ollama_key:
+            yield "⚠️ **Ollama Error:** `OLLAMA_API_KEY` is not set in Render environment variables."
+            return
+        try:
+            prompt_text = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in messages])
+            resp = requests.post(
+                f"{ollama_host}/api/generate",
+                headers={"Authorization": f"Bearer {ollama_key}", "Content-Type": "application/json"},
+                json={"model": "llama3.2", "prompt": prompt_text, "stream": False},
+                timeout=30
+            )
+            if resp.status_code == 200:
+                yield resp.json().get("response", "[No output from Ollama]")
+            else:
+                yield f"⚠️ **Ollama HTTP Error {resp.status_code}:** {resp.text}"
             return
         except Exception as e:
-            yield f"⚠️ **Gemini API Error:** {e}"
+            yield f"⚠️ **Ollama Connection Error:** {e}"
             return
 
-    # --- DEEPSEEK R1 HANDLER ---
+    # --- DEEPSEEK R1 REASONING HANDLER ---
     elif model_choice == "DeepSeek R1 (Reasoning)":
         try:
             deepseek_client = InferenceClient(model="deepseek-ai/DeepSeek-R1-Distill-Qwen-32B", token=hf_token)
@@ -347,7 +385,7 @@ def stream_model_response(model_choice, messages, temp, tokens):
                         args = json.loads(tool_call.function.arguments)
                     except Exception:
                         args = {}
-                    yield f"🛠️ **Agent Action:** Executing tool `{fn_name}` with arguments `{args}`...\n\n"
+                    yield f"🛠️ **Agent Action:** Running `{fn_name}` with arguments `{args}`...\n\n"
                     tool_result = execute_tool_call(fn_name, args)
                     
                     messages.append({
@@ -365,7 +403,7 @@ def stream_model_response(model_choice, messages, temp, tokens):
                         "content": str(tool_result)
                     })
                 
-                full_res = "### 📊 Tool Results & Analysis:\n"
+                full_res = "### 📊 Tool Results & Output:\n"
                 for token in qwen_client.chat_completion(messages, max_tokens=int(tokens), temperature=float(temp), stream=True):
                     chunk = token.choices[0].delta.content
                     if chunk:
@@ -418,13 +456,14 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
             
             model_choice = gr.Dropdown(
                 choices=[
-                    "GPT-4o (OpenAI)",
-                    "GPT-4o-mini (OpenAI)",
                     "Qwen 2.5 7B (Autonomous Agent)",
+                    "Gemini 1.5 Flash",
+                    "Ollama API",
                     "DeepSeek R1 (Reasoning)",
-                    "Gemini 1.5 Flash"
+                    "GPT-4o (OpenAI)",
+                    "GPT-4o-mini (OpenAI)"
                 ],
-                value="GPT-4o (OpenAI)",
+                value="Qwen 2.5 7B (Autonomous Agent)",
                 label="Select AI Model Engine"
             )
             system_prompt = gr.Textbox(value=DEFAULT_SYSTEM_PROMPT, label="System Instructions", lines=2)
@@ -441,7 +480,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
         with gr.Column(scale=8):
             chatbot = gr.Chatbot(height=520, elem_classes=["chatbot-container"], type="messages")
             with gr.Row():
-                msg = gr.Textbox(placeholder="Message Thunder AI or ask to generate an image...", show_label=False, container=False, scale=9)
+                msg = gr.Textbox(placeholder="Message Thunder AI or ask 'generate an image of ...'", show_label=False, container=False, scale=9)
                 send_btn = gr.Button("⚡ Run", variant="primary", scale=1)
 
         # RIGHT PANEL: Interactive Code Sandbox
@@ -490,12 +529,13 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
 
         last_user_msg = history[-1]["content"].strip()
 
-        # Image Generation Handler
+        # Image Generation Intent Detection
         image_patterns = [
-            r"generate an image of\s+(.*)",
-            r"create an image of\s+(.*)",
+            r"generate\s+(?:an?\s+)?image\s+(?:of\s+)?(.*)",
+            r"generator\s+(?:a|an)\s+image\s+(?:of\s+)?(.*)",
+            r"create\s+(?:an?\s+)?image\s+(?:of\s+)?(.*)",
             r"draw\s+(.*)",
-            r"make an image of\s+(.*)"
+            r"make\s+(?:an?\s+)?image\s+(?:of\s+)?(.*)"
         ]
         
         image_prompt = None
@@ -506,22 +546,23 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", secondary_hue="slate"), 
                 break
 
         if image_prompt:
-            history = history + [{"role": "assistant", "content": f"🎨 **Generating image using FLUX.1-schnell...**\n*Prompt:* \"{image_prompt}\""}]
+            history = history + [{"role": "assistant", "content": f"🎨 **Generating image for:** *\"{image_prompt}\"*..."}]
             yield history, history, current_code
             
             img_path, err = generate_image_flux(image_prompt)
             if err:
                 history[-1]["content"] = f"⚠️ **Image Generation Failed:** {err}"
             else:
-                history[-1]["content"] = f"Here is your generated image for **\"{image_prompt}\"**:\n\n![{image_prompt}]({img_path})"
+                history[-1]["content"] = f"Here is your generated image:\n\n![{image_prompt}]({img_path})"
                 
             save_message(sid, "assistant", history[-1]["content"])
             yield history, history, current_code
             return
 
-        # Prepare System & Document Context
+        # Prepare System & Context Messages
         messages = [{"role": "system", "content": sys_prompt}]
-        if f_context: messages.append({"role": "system", "content": f"Document Context:\n{f_context}"})
+        if f_context: 
+            messages.append({"role": "system", "content": f"Document Context:\n{f_context}"})
 
         for msg_item in history:
             messages.append({"role": msg_item["role"], "content": msg_item["content"]})
