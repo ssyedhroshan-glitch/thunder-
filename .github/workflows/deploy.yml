@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [ "main" ]
 
+# Grant write permissions for GHCR publishing
+permissions:
+  contents: read
+  packages: write
+
 jobs:
   test-and-coverage:
     name: Run Tests & Coverage
@@ -39,8 +44,8 @@ jobs:
           pytest --cov=app test_app.py >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
-  docker-build:
-    name: Build & Verify Docker Image
+  docker-build-and-push:
+    name: Build & Push Docker Image to GHCR
     needs: test-and-coverage
     runs-on: ubuntu-latest
 
@@ -51,19 +56,37 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build Docker Image
+      - name: Log in to GitHub Container Registry (GHCR)
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Metadata & Tags for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest
+            type=sha,format=short
+
+      - name: Build & Push Docker Image
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile
-          push: false
-          tags: thunder-workspace:latest
+          push: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
   deploy:
     name: Trigger Render Deployment
-    needs: [test-and-coverage, docker-build]
+    needs: [test-and-coverage, docker-build-and-push]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
 
