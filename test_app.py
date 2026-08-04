@@ -6,7 +6,7 @@ from app import (
     init_db,
     create_new_session,
     get_all_sessions,
-    rename_session_in_db,
+    update_session_title,
     delete_session_from_db,
     save_message,
     load_history,
@@ -39,7 +39,7 @@ def test_session_lifecycle():
     assert len(sessions) == 2
     
     # Rename
-    rename_session_in_db(new_id, "Staging Environment")
+    update_session_title(new_id, "Staging Environment")
     updated_sessions = get_all_sessions()
     session_names = [s[1] for s in updated_sessions]
     assert "Staging Environment" in session_names
@@ -86,4 +86,4 @@ def test_file_reader_text_file():
     finally:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
-          
+            
