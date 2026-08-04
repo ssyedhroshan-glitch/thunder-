@@ -7,8 +7,8 @@ on:
     branches: [ "main" ]
 
 jobs:
-  test:
-    name: Run Automated Test Suite
+  test-and-coverage:
+    name: Run Tests & Coverage
     runs-on: ubuntu-latest
 
     steps:
@@ -24,16 +24,46 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest
+          pip install pytest pytest-cov
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      - name: Execute Pytest
+      - name: Execute Pytest with Coverage
         run: |
-          pytest -v test_app.py
+          pytest --cov=app --cov-report=term-missing --cov-report=xml --cov-fail-under=80 test_app.py
+
+      - name: Upload Coverage Results to GitHub Summary
+        if: always()
+        run: |
+          echo "### 📊 Pytest-Cov Coverage Report" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          pytest --cov=app test_app.py >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+  docker-build:
+    name: Build & Verify Docker Image
+    needs: test-and-coverage
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          tags: thunder-workspace:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   deploy:
     name: Trigger Render Deployment
-    needs: test
+    needs: [test-and-coverage, docker-build]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
 
