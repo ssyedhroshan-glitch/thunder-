@@ -34,7 +34,7 @@ jobs:
 
       - name: Execute Pytest with Coverage
         run: |
-          pytest --cov=app --cov-report=term-missing --cov-report=xml --cov-fail-under=20 test_app.py
+          pytest --cov=app --cov-report=term-missing --cov-report=xml --cov-fail-under=80 test_app.py
 
       - name: Upload Coverage Results to GitHub Summary
         if: always()
