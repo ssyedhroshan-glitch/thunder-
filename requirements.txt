@@ -6,3 +6,5 @@ google-genai
 requests
 openai
 pillow
+pytest
+pytest-cov
