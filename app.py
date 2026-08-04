@@ -548,5 +548,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", neutral_hue="slate"), cs
     exec_py_btn.click(tool_execute_python, inputs=[py_code_box], outputs=[py_out_box])
     clear_btn.click(lambda sid: (clear_session_history(sid), [], [])[1:], inputs=[session_id], outputs=[chatbot, chat_state])
 
-port_number = int(os.environ.get("PORT", 10000))
-demo.queue(default_concurrency_limit=10).launch(server_name="0.0.0.0", server_port=port_number)
+if __name__ == "__main__":
+    port_number = int(os.environ.get("PORT", 10000))
+    demo.queue(default_concurrency_limit=10).launch(server_name="0.0.0.0", server_port=port_number)
+    
