@@ -33,6 +33,10 @@ _gc_utils._json_schema_to_python_type = _patched_json_schema_to_python_type
 import gradio as gr
 from huggingface_hub import InferenceClient
 
+# Initialize modern Google GenAI Client
+from google import genai
+from google.genai import types
+
 # ==========================================
 # 2. ENVIRONMENT & CLIENT CONFIGURATION
 # ==========================================
@@ -44,7 +48,7 @@ OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "https://ollama.com")
 
 DB_PATH = "thunder_v5_memory.db"
 
-# Resilient inference clients
+# Resilient Hugging Face inference clients
 if HF_TOKEN:
     qwen_client = InferenceClient(model="Qwen/Qwen2.5-7B-Instruct", token=HF_TOKEN, timeout=20)
     whisper_client = InferenceClient(model="openai/whisper-large-v3", token=HF_TOKEN, timeout=20)
@@ -53,6 +57,9 @@ else:
     qwen_client = InferenceClient(model="Qwen/Qwen2.5-7B-Instruct", timeout=20)
     whisper_client = InferenceClient(model="openai/whisper-large-v3", timeout=20)
     flux_client = InferenceClient(model="black-forest-labs/FLUX.1-schnell", timeout=30)
+
+# Initialize Google GenAI Client if API key exists
+genai_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
 
 # ==========================================
 # 3. AUTONOMOUS TOOL DEFINITIONS
@@ -100,7 +107,7 @@ def tool_web_search(query: str):
     try:
         from duckduckgo_search import DDGS
         with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=3))
+            results = list(ddgs.text(keywords=query, max_results=3))
         if not results: 
             return "No web results found."
         return "\n---\n".join([f"Title: {r.get('title')}\nURL: {r.get('href')}\nSnippet: {r.get('body')}" for r in results])
@@ -138,7 +145,7 @@ def execute_tool_call(tool_name, arguments):
     return f"Unknown tool: {tool_name}"
 
 # ==========================================
-# 4. HIGH-PERFORMANCE DATABASE LAYER
+# 4. DATABASE LAYER
 # ==========================================
 def init_db():
     with sqlite3.connect(DB_PATH) as conn:
@@ -165,11 +172,11 @@ def get_all_sessions():
         rows = conn.execute("SELECT id, name FROM sessions ORDER BY updated_at DESC").fetchall()
         if not rows:
             default_id = str(uuid.uuid4())
-            conn.execute("INSERT INTO sessions (id, name) VALUES (?, ?)", (default_id, "Default Workspace"))
-            return [(default_id, "Default Workspace")]
+            conn.execute("INSERT INTO sessions (id, name) VALUES (?, ?)", (default_id, "Default Project"))
+            return [(default_id, "Default Project")]
         return rows
 
-def create_new_session(name="New Workspace"):
+def create_new_session(name="New Project"):
     with sqlite3.connect(DB_PATH) as conn:
         new_id = str(uuid.uuid4())
         conn.execute("INSERT INTO sessions (id, name) VALUES (?, ?)", (new_id, name))
@@ -245,20 +252,30 @@ def extract_artifacts(text):
 # ==========================================
 # 7. ROUTER ENGINE & AGENT LOOPS
 # ==========================================
-def run_autonomous_loop(messages, tokens, temp, max_iterations=3):
+def run_autonomous_loop(messages, tokens, temp, tool_access="Auto", web_search_enabled=True, max_iterations=3):
     iter_count = 0
     trace_output = ""
+    
+    active_tools = []
+    if tool_access != "Off":
+        if web_search_enabled:
+            active_tools.extend(TOOL_DEFINITIONS)
+        else:
+            active_tools = [t for t in TOOL_DEFINITIONS if t["function"]["name"] != "web_search"]
     
     while iter_count < max_iterations:
         iter_count += 1
         try:
-            response = qwen_client.chat_completion(
-                messages=messages,
-                tools=TOOL_DEFINITIONS,
-                tool_choice="auto",
-                max_tokens=int(tokens),
-                temperature=float(temp)
-            )
+            kwargs = {
+                "messages": messages,
+                "max_tokens": int(tokens),
+                "temperature": float(temp)
+            }
+            if active_tools:
+                kwargs["tools"] = active_tools
+                kwargs["tool_choice"] = "required" if tool_access == "Required" else "auto"
+
+            response = qwen_client.chat_completion(**kwargs)
             msg_obj = response.choices[0].message
             
             if hasattr(msg_obj, "tool_calls") and msg_obj.tool_calls:
@@ -292,9 +309,9 @@ def run_autonomous_loop(messages, tokens, temp, max_iterations=3):
             yield trace_output + f"\n⚠️ **Agent Loop Error:** {e}"
             return
 
-def stream_model_response(model_choice, messages, temp, tokens):
+def stream_model_response(model_choice, messages, temp, tokens, web_search, tool_access):
     if "Qwen" in model_choice:
-        for chunk in run_autonomous_loop(messages, tokens, temp):
+        for chunk in run_autonomous_loop(messages, tokens, temp, tool_access=tool_access, web_search_enabled=web_search):
             yield chunk
         return
 
@@ -304,10 +321,27 @@ def stream_model_response(model_choice, messages, temp, tokens):
             yield "⚠️ **Gemini Error:** `GEMINI_API_KEY` missing."
             return
         try:
-            from google import genai
-            g_client = genai.Client(api_key=current_gemini_key)
-            formatted = [{"role": "user" if m["role"] == "user" else "model", "parts": [{"text": m["content"]}]} for m in messages if m["role"] != "system"]
-            res = g_client.models.generate_content(model="gemini-1.5-flash", contents=formatted)
+            client = genai.Client(api_key=current_gemini_key)
+            system_instruction = None
+            prompt_content = []
+
+            for m in messages:
+                if m["role"] == "system":
+                    system_instruction = m["content"]
+                elif m["content"]:
+                    prompt_content.append(f"{m['role'].upper()}: {m['content']}")
+
+            full_prompt = "\n\n".join(prompt_content)
+
+            res = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=full_prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    temperature=float(temp),
+                    max_output_tokens=int(tokens)
+                )
+            )
             yield res.text or "[Done]"
             return
         except Exception as e:
@@ -376,12 +410,29 @@ DEFAULT_SYSTEM_PROMPT = (
 
 custom_css = """
 footer {visibility: hidden;}
-body, .gradio-container {background-color: #090d16 !important;}
+body, .gradio-container {background-color: #0b0f17 !important;}
 .panel-card {
     background-color: #111827 !important;
     border: 1px solid #1f2937 !important;
-    border-radius: 12px !important;
-    padding: 14px !important;
+    border-radius: 16px !important;
+    padding: 16px !important;
+}
+.quick-action-btn {
+    border-radius: 16px !important;
+    background: #1e293b !important;
+    border: 1px solid #334155 !important;
+    color: #f8fafc !important;
+    padding: 18px 8px !important;
+    font-weight: 600 !important;
+}
+.quick-action-btn:hover {
+    background: #334155 !important;
+}
+.setting-row {
+    background: #1e293b !important;
+    border-radius: 14px !important;
+    padding: 8px 12px !important;
+    margin-bottom: 8px !important;
 }
 .accent-title {
     color: #38bdf8 !important;
@@ -394,51 +445,84 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", neutral_hue="slate"), cs
     chat_state = gr.State([])
     file_context_state = gr.State("")
 
-    gr.Markdown("<center><h2 class='accent-title'>⚡ THUNDER AI — UNIFIED PLATFORM</h2></center>")
+    gr.Markdown("<center><h2 class='accent-title'>⚡ THUNDER AI — WORKSPACE</h2></center>")
 
     with gr.Row():
-        # LEFT PANEL: Controls, Multi-Modal Inputs & Model Selection
-        with gr.Column(scale=3, elem_classes=["panel-card"]):
-            session_selector = gr.Dropdown(choices=[], label="Workspace Sessions")
-            new_session_btn = gr.Button("➕ New Workspace", size="sm")
-            model_choice = gr.Dropdown(
-                choices=[
-                    "Qwen 2.5 7B (Autonomous Agent)",
-                    "Gemini 1.5 Flash",
-                    "Ollama API",
-                    "DeepSeek R1 (Reasoning)",
-                    "GPT-4o (OpenAI)"
-                ],
-                value="Qwen 2.5 7B (Autonomous Agent)",
-                label="AI Core Model Engine"
-            )
-            system_prompt = gr.Textbox(value=DEFAULT_SYSTEM_PROMPT, label="System Instructions", lines=2)
-            temperature = gr.Slider(0.1, 1.5, value=0.7, label="Temperature")
-            max_tokens = gr.Slider(128, 2048, value=1024, label="Max Tokens")
+        # LEFT PANEL: Attachment & Tool Control Panel
+        with gr.Column(scale=4, elem_classes=["panel-card"]):
+            gr.Markdown("### 🧰 Input & Tool Controls")
             
-            file_input = gr.File(label="Attach File (PDF/TXT)", file_count="single")
-            audio_input = gr.Audio(sources=["microphone", "upload"], type="filepath", label="🎙️ Voice Input (Microphone)")
+            with gr.Row():
+                camera_btn = gr.Button("📷\nCamera", elem_classes=["quick-action-btn"])
+                photos_btn = gr.Button("🖼️\nPhotos", elem_classes=["quick-action-btn"])
+                files_btn = gr.Button("📄\nFiles", elem_classes=["quick-action-btn"])
+
+            photo_upload = gr.Image(sources=["upload", "webcam"], type="filepath", visible=False)
+            file_upload = gr.File(label="Attach File (PDF/TXT)", file_count="single", visible=False)
+
+            gr.Markdown("---")
+            
+            web_search_toggle = gr.Checkbox(value=True, label="🌐 Web search", info="Enable live internet queries")
+            
+            session_selector = gr.Dropdown(choices=[], label="📂 Add to project", info="Select active workspace/project")
+            new_project_btn = gr.Button("➕ New Project", size="sm")
+
+            tool_access_mode = gr.Dropdown(
+                choices=["Auto", "Required", "Off"],
+                value="Auto",
+                label="🧰 Tool access",
+                info="Control model tool execution"
+            )
+
+            connectors_select = gr.Dropdown(
+                choices=["Default Connectors", "GitHub Integration", "Google Drive", "Custom API"],
+                value="Default Connectors",
+                label="🔌 Connectors"
+            )
+
+            with gr.Accordion("⚙️ Engine & Prompt Settings", open=False):
+                model_choice = gr.Dropdown(
+                    choices=[
+                        "Qwen 2.5 7B (Autonomous Agent)",
+                        "Gemini 2.5 Flash",
+                        "Ollama API",
+                        "DeepSeek R1 (Reasoning)",
+                        "GPT-4o (OpenAI)"
+                    ],
+                    value="Qwen 2.5 7B (Autonomous Agent)",
+                    label="AI Core Engine"
+                )
+                system_prompt = gr.Textbox(value=DEFAULT_SYSTEM_PROMPT, label="System Instructions", lines=2)
+                temperature = gr.Slider(0.1, 1.5, value=0.7, label="Temperature")
+                max_tokens = gr.Slider(128, 2048, value=1024, label="Max Tokens")
+                audio_input = gr.Audio(sources=["microphone"], type="filepath", label="🎙️ Voice Input")
+
             clear_btn = gr.Button("Reset Chat History", variant="stop")
 
         # CENTER PANEL: Real-time Chat Engine
         with gr.Column(scale=5):
-            chatbot = gr.Chatbot(height=540, type="messages", bubble_full_width=False)
+            chatbot = gr.Chatbot(height=560, type="messages", bubble_full_width=False)
             with gr.Row():
-                msg = gr.Textbox(placeholder="Message Thunder AI, 'draw a sunset', or 'build an HTML app'...", show_label=False, scale=9)
-                send_btn = gr.Button("⚡ Run", variant="primary", scale=1)
+                msg = gr.Textbox(placeholder="Ask a question, request web search, or build code...", show_label=False, scale=9)
+                send_btn = gr.Button("⚡ Send", variant="primary", scale=1)
 
-        # RIGHT PANEL: Interactive Canvas & Code Execution Sandbox
-        with gr.Column(scale=5, elem_classes=["panel-card"]):
-            gr.Markdown("### 🎨 Live Artifacts & Sandbox Canvas")
+        # RIGHT PANEL: Interactive Canvas
+        with gr.Column(scale=4, elem_classes=["panel-card"]):
+            gr.Markdown("### 🎨 Live Canvas & Code Sandbox")
             
             with gr.Tabs():
-                with gr.TabItem("🌐 Live Web App Canvas"):
+                with gr.TabItem("🌐 Web Canvas"):
                     html_preview = gr.HTML(value="<div style='color:#6b7280; text-align:center; padding:20px;'>Generated Web UIs render here instantly.</div>")
                 
-                with gr.TabItem("🐍 Interactive Python Sandbox"):
+                with gr.TabItem("🐍 Python Sandbox"):
                     py_code_box = gr.Code(label="Extracted Python Code", language="python", lines=10)
                     exec_py_btn = gr.Button("▶️ Run Code", variant="primary", size="sm")
                     py_out_box = gr.Textbox(label="Execution Output", lines=4, interactive=False)
+
+    # UI Event Toggles for Quick Actions
+    camera_btn.click(lambda: gr.update(visible=True), None, photo_upload)
+    photos_btn.click(lambda: gr.update(visible=True), None, photo_upload)
+    files_btn.click(lambda: gr.update(visible=True), None, file_upload)
 
     # Session Database Handlers
     def start_session():
@@ -459,14 +543,14 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", neutral_hue="slate"), cs
     session_selector.change(switch_session, inputs=[session_selector], outputs=[session_id, chatbot, chat_state])
 
     def handle_new_session():
-        new_id = create_new_session("New Workspace")
+        new_id = create_new_session("New Project")
         sessions = get_all_sessions()
         return new_id, [], [], gr.update(choices=[(n, s) for s, n in sessions], value=new_id)
 
-    new_session_btn.click(handle_new_session, None, [session_id, chatbot, chat_state, session_selector])
+    new_project_btn.click(handle_new_session, None, [session_id, chatbot, chat_state, session_selector])
 
     audio_input.change(lambda path: transcribe_audio(path) if path else "", inputs=[audio_input], outputs=[msg])
-    file_input.change(lambda file_obj: read_file(file_obj), inputs=[file_input], outputs=[file_context_state])
+    file_upload.change(lambda file_obj: read_file(file_obj), inputs=[file_upload], outputs=[file_context_state])
 
     def user_send(message, history, sid):
         if not message.strip(): 
@@ -475,7 +559,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", neutral_hue="slate"), cs
         save_message(sid, "user", message)
         return "", new_hist, new_hist
 
-    def bot_reply(history, sys_prompt, model_sel, temp, tokens, f_context, sid, current_py, current_html):
+    def bot_reply(history, sys_prompt, model_sel, temp, tokens, f_context, sid, web_search, tool_mode, current_py, current_html):
         if not history: 
             yield history, history, current_py, current_html
             return
@@ -510,7 +594,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", neutral_hue="slate"), cs
             yield history, history, current_py, current_html
             return
 
-        # Prepare System Prompt & Document Context
+        # Prepare System Prompt & Context
         messages = [{"role": "system", "content": sys_prompt}]
         if f_context: 
             messages.append({"role": "system", "content": f"Document Context:\n{f_context}"})
@@ -521,7 +605,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", neutral_hue="slate"), cs
         history = history + [{"role": "assistant", "content": ""}]
 
         full_text = ""
-        for chunk in stream_model_response(model_sel, messages, temp, tokens):
+        for chunk in stream_model_response(model_sel, messages, temp, tokens, web_search, tool_mode):
             full_text = chunk
             history[-1]["content"] = full_text
             
@@ -535,20 +619,18 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", neutral_hue="slate"), cs
 
     msg.submit(user_send, [msg, chat_state, session_id], [msg, chatbot, chat_state]).then(
         bot_reply, 
-        [chat_state, system_prompt, model_choice, temperature, max_tokens, file_context_state, session_id, py_code_box, html_preview], 
+        [chat_state, system_prompt, model_choice, temperature, max_tokens, file_context_state, session_id, web_search_toggle, tool_access_mode, py_code_box, html_preview], 
         [chatbot, chat_state, py_code_box, html_preview]
     )
 
     send_btn.click(user_send, [msg, chat_state, session_id], [msg, chatbot, chat_state]).then(
         bot_reply, 
-        [chat_state, system_prompt, model_choice, temperature, max_tokens, file_context_state, session_id, py_code_box, html_preview], 
+        [chat_state, system_prompt, model_choice, temperature, max_tokens, file_context_state, session_id, web_search_toggle, tool_access_mode, py_code_box, html_preview], 
         [chatbot, chat_state, py_code_box, html_preview]
     )
 
     exec_py_btn.click(tool_execute_python, inputs=[py_code_box], outputs=[py_out_box])
     clear_btn.click(lambda sid: (clear_session_history(sid), [], [])[1:], inputs=[session_id], outputs=[chatbot, chat_state])
 
-if __name__ == "__main__":
-    port_number = int(os.environ.get("PORT", 10000))
-    demo.queue(default_concurrency_limit=10).launch(server_name="0.0.0.0", server_port=port_number)
-    
+port_number = int(os.environ.get("PORT", 10000))
+demo.queue(default_concurrency_limit=10).launch(server_name="0.0.0.0", server_port=port_number)
