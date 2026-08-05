@@ -131,7 +131,7 @@ def tool_scrape_url(url: str):
         resp = requests.get(url, headers=headers, timeout=10)
         resp.raise_for_status()
         text = re.sub(r'<[^>]+>', ' ', resp.text)
-        return ' '.join(text.split())[:4000]
+        return ' '.join(text.split())[:2000]
     except Exception as e:
         return f"Scraping Error: {e}"
 
@@ -230,10 +230,10 @@ def read_file(file_obj):
         if ext == ".pdf":
             from pypdf import PdfReader
             reader = PdfReader(file_path)
-            return "\n".join((page.extract_text() or "") for i, page in enumerate(reader.pages) if i < 10)[:6000]
+            return "\n".join((page.extract_text() or "") for i, page in enumerate(reader.pages) if i < 10)[:2000]
         else:
             with open(file_path, "r", errors="ignore", encoding="utf-8") as f:
-                return f.read(8000)[:6000]
+                return f.read(4000)[:2000]
     except Exception as e:
         return f"[File Read Error: {e}]"
 
@@ -263,11 +263,14 @@ def run_autonomous_loop(messages, tokens, temp, tool_access="Auto", web_search_e
         else:
             active_tools = [t for t in TOOL_DEFINITIONS if t["function"]["name"] != "web_search"]
     
+    # Keep only the last 10 messages to protect the model context window
+    truncated_messages = messages[-10:] if len(messages) > 10 else list(messages)
+
     while iter_count < max_iterations:
         iter_count += 1
         try:
             kwargs = {
-                "messages": messages,
+                "messages": truncated_messages,
                 "max_tokens": int(tokens),
                 "temperature": float(temp)
             }
@@ -286,12 +289,15 @@ def run_autonomous_loop(messages, tokens, temp, tool_access="Auto", web_search_e
                     except Exception:
                         args = {}
                     
-                    trace_output += f"🛠️ **Agent Action (Step {iter_count}):** Executing `{fn_name}` with `{args}`...\n\n"
+                    trace_output += f"🛠️ **Agent Action (Step {iter_count}):** Executing `{fn_name}`...\n\n"
                     yield trace_output
                     
                     result = execute_tool_call(fn_name, args)
                     
-                    messages.append({
+                    # Truncate tool response content (max 2000 chars)
+                    truncated_result = str(result)[:2000]
+                    
+                    truncated_messages.append({
                         "role": "assistant",
                         "content": None,
                         "tool_calls": [{
@@ -300,7 +306,11 @@ def run_autonomous_loop(messages, tokens, temp, tool_access="Auto", web_search_e
                             "function": {"name": fn_name, "arguments": json.dumps(args)}
                         }]
                     })
-                    messages.append({"role": "tool", "tool_call_id": tool_call.id, "content": str(result)})
+                    truncated_messages.append({
+                        "role": "tool", 
+                        "tool_call_id": tool_call.id, 
+                        "content": truncated_result
+                    })
             else:
                 trace_output += (msg_obj.content or "")
                 yield trace_output
@@ -328,7 +338,7 @@ def stream_model_response(model_choice, messages, temp, tokens, web_search, tool
             for m in messages:
                 if m["role"] == "system":
                     system_instruction = m["content"]
-                elif m["content"]:
+                elif m.get("content"):
                     prompt_content.append(f"{m['role'].upper()}: {m['content']}")
 
             full_prompt = "\n\n".join(prompt_content)
@@ -353,7 +363,7 @@ def stream_model_response(model_choice, messages, temp, tokens, web_search, tool
             yield "⚠️ **Ollama Error:** `OLLAMA_API_KEY` missing."
             return
         try:
-            prompt_text = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in messages])
+            prompt_text = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in messages if m.get("content")])
             resp = requests.post(
                 f"{OLLAMA_HOST}/api/generate",
                 headers={"Authorization": f"Bearer {OLLAMA_KEY}"},
@@ -492,7 +502,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", neutral_hue="slate"), cs
                     value="Qwen 2.5 7B (Autonomous Agent)",
                     label="AI Core Engine"
                 )
-                system_prompt = gr.Textbox(value=DEFAULT_SYSTEM_PROMPT, label="System Instructions", lines=2)
+                system_prompt = gr.Textbox(value=DEFAULT_SYSTEM_PROMPT, label="System Instructions",lines=2)
                 temperature = gr.Slider(0.1, 1.5, value=0.7, label="Temperature")
                 max_tokens = gr.Slider(128, 2048, value=1024, label="Max Tokens")
                 audio_input = gr.Audio(sources=["microphone"], type="filepath", label="🎙️ Voice Input")
@@ -594,12 +604,12 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", neutral_hue="slate"), cs
             yield history, history, current_py, current_html
             return
 
-        # Prepare System Prompt & Context
+        # Prepare System Prompt & Context (Restricted to last 8 turns)
         messages = [{"role": "system", "content": sys_prompt}]
         if f_context: 
-            messages.append({"role": "system", "content": f"Document Context:\n{f_context}"})
+            messages.append({"role": "system", "content": f"Document Context:\n{f_context[:2000]}"})
 
-        for msg_item in history:
+        for msg_item in history[-8:]:
             messages.append({"role": msg_item["role"], "content": msg_item["content"]})
 
         history = history + [{"role": "assistant", "content": ""}]
