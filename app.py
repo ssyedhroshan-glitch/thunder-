@@ -33,7 +33,6 @@ _gc_utils._json_schema_to_python_type = _patched_json_schema_to_python_type
 import gradio as gr
 from huggingface_hub import InferenceClient
 
-# Initialize modern Google GenAI Client
 from google import genai
 from google.genai import types
 
@@ -48,7 +47,6 @@ OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "https://ollama.com")
 
 DB_PATH = "thunder_v5_memory.db"
 
-# Resilient Hugging Face inference clients
 if HF_TOKEN:
     qwen_client = InferenceClient(model="Qwen/Qwen2.5-7B-Instruct", token=HF_TOKEN, timeout=20)
     whisper_client = InferenceClient(model="openai/whisper-large-v3", token=HF_TOKEN, timeout=20)
@@ -403,7 +401,7 @@ def stream_model_response(model_choice, messages, temp, tokens, web_search, tool
             yield f"⚠️ **OpenAI Error:** {e}"
 
 # ==========================================
-# 7. UNIFIED (+) TOOL LAYOUT
+# 7. UNIFIED LAYOUT WITH DRAWER BELOW PROMPT
 # ==========================================
 DEFAULT_SYSTEM_PROMPT = (
     "You are Thunder AI, a high-speed multi-modal agent. "
@@ -439,9 +437,16 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", neutral_hue="slate"), cs
 
     gr.Markdown("<center><h3 class='accent-title'>⚡ THUNDER AI — WORKSPACE</h3></center>")
 
+    # 1. CHAT DISPLAY AT TOP
     chatbot = gr.Chatbot(height=450, type="messages", bubble_full_width=False)
 
-    # COLLAPSIBLE (+) TOOL DRAWER
+    # 2. PROMPT INPUT BAR WITH (+) BUTTON
+    with gr.Row():
+        plus_btn = gr.Button("+", elem_classes=["plus-btn"], scale=1)
+        msg = gr.Textbox(placeholder="Ask a question, request search, or tap (+) for tools...", show_label=False, scale=8)
+        send_btn = gr.Button("⚡ Send", variant="primary", scale=2)
+
+    # 3. TOOLS & INPUT OPTIONS DRAWER (PLACED BELOW PROMPT BAR)
     with gr.Accordion("➕ Tools & Input Options", open=False) as tool_drawer:
         with gr.Row():
             cam_input = gr.Image(sources=["webcam"], type="filepath", label="📷 Camera", height=130)
@@ -469,13 +474,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", neutral_hue="slate"), cs
             audio_input = gr.Audio(sources=["microphone"], type="filepath", label="🎙️ Voice Input")
             clear_btn = gr.Button("Reset Memory", variant="stop", size="sm")
 
-    # LEFT-SIDE (+) TOOL INPUT BAR
-    with gr.Row():
-        plus_btn = gr.Button("+", elem_classes=["plus-btn"], scale=1)
-        msg = gr.Textbox(placeholder="Ask a question, request search, or attach media above...", show_label=False, scale=8)
-        send_btn = gr.Button("⚡ Send", variant="primary", scale=2)
-
-    # CANVAS & CODE PREVIEW AT BOTTOM
+    # 4. CANVAS & SANDBOX AT BOTTOM
     with gr.Accordion("🎨 Live Web Canvas & Sandbox Output", open=False):
         html_preview = gr.HTML(value="<div style='color:#6b7280; text-align:center; padding:10px;'>Generated Web UIs render here.</div>")
         py_code_box = gr.Code(label="Extracted Python Code", language="python", lines=6)
@@ -483,9 +482,6 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", neutral_hue="slate"), cs
         py_out_box = gr.Textbox(label="Execution Output", lines=3, interactive=False)
 
     # TOGGLE TOOL DRAWER VIA (+) BUTTON
-    def toggle_drawer(is_open):
-        return gr.update(open=not is_open)
-
     drawer_state = gr.State(False)
     plus_btn.click(lambda current: not current, inputs=[drawer_state], outputs=[drawer_state]).then(
         lambda open_status: gr.update(open=open_status), inputs=[drawer_state], outputs=[tool_drawer]
