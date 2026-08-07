@@ -401,7 +401,7 @@ def stream_model_response(model_choice, messages, temp, tokens, web_search, tool
             yield f"⚠️ **OpenAI Error:** {e}"
 
 # ==========================================
-# 7. UNIFIED LAYOUT WITH DRAWER BELOW PROMPT
+# 7. UNIFIED LAYOUT WITH POPUP INSIDE (+)
 # ==========================================
 DEFAULT_SYSTEM_PROMPT = (
     "You are Thunder AI, a high-speed multi-modal agent. "
@@ -412,12 +412,6 @@ DEFAULT_SYSTEM_PROMPT = (
 custom_css = """
 footer {visibility: hidden;}
 body, .gradio-container {background-color: #0b0f17 !important;}
-.panel-card {
-    background-color: #111827 !important;
-    border: 1px solid #1f2937 !important;
-    border-radius: 12px !important;
-    padding: 10px !important;
-}
 .accent-title {
     color: #38bdf8 !important;
     font-weight: 700 !important;
@@ -437,21 +431,22 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", neutral_hue="slate"), cs
 
     gr.Markdown("<center><h3 class='accent-title'>⚡ THUNDER AI — WORKSPACE</h3></center>")
 
-    # 1. CHAT DISPLAY AT TOP
+    # CHAT DISPLAY AT TOP
     chatbot = gr.Chatbot(height=450, type="messages", bubble_full_width=False)
 
-    # 2. PROMPT INPUT BAR WITH (+) BUTTON
+    # PROMPT INPUT BAR
     with gr.Row():
         plus_btn = gr.Button("+", elem_classes=["plus-btn"], scale=1)
         msg = gr.Textbox(placeholder="Ask a question, request search, or tap (+) for tools...", show_label=False, scale=8)
         send_btn = gr.Button("⚡ Send", variant="primary", scale=2)
 
-    # 3. TOOLS & INPUT OPTIONS DRAWER (PLACED BELOW PROMPT BAR)
-    with gr.Accordion("➕ Tools & Input Options", open=False) as tool_drawer:
+    # TOOLS POPUP directly triggered by (+) button
+    with gr.Popup(trigger=plus_btn) as tools_popup:
+        gr.Markdown("#### 🛠️ Tools & Input Options")
         with gr.Row():
-            cam_input = gr.Image(sources=["webcam"], type="filepath", label="📷 Camera", height=130)
-            photo_input = gr.Image(sources=["upload"], type="filepath", label="🖼️ Photos / Gallery", height=130)
-            file_upload = gr.File(label="📄 Files (PDF/TXT)", file_count="single", height=130)
+            cam_input = gr.Image(sources=["webcam"], type="filepath", label="📷 Camera", height=120)
+            photo_input = gr.Image(sources=["upload"], type="filepath", label="🖼️ Photos / Gallery", height=120)
+            file_upload = gr.File(label="📄 Files (PDF/TXT)", file_count="single", height=120)
 
         with gr.Row():
             web_search_toggle = gr.Checkbox(value=True, label="🌐 Live Web Search")
@@ -474,18 +469,12 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", neutral_hue="slate"), cs
             audio_input = gr.Audio(sources=["microphone"], type="filepath", label="🎙️ Voice Input")
             clear_btn = gr.Button("Reset Memory", variant="stop", size="sm")
 
-    # 4. CANVAS & SANDBOX AT BOTTOM
+    # CANVAS & SANDBOX AT BOTTOM
     with gr.Accordion("🎨 Live Web Canvas & Sandbox Output", open=False):
         html_preview = gr.HTML(value="<div style='color:#6b7280; text-align:center; padding:10px;'>Generated Web UIs render here.</div>")
         py_code_box = gr.Code(label="Extracted Python Code", language="python", lines=6)
         exec_py_btn = gr.Button("▶️ Run Code", variant="primary", size="sm")
         py_out_box = gr.Textbox(label="Execution Output", lines=3, interactive=False)
-
-    # TOGGLE TOOL DRAWER VIA (+) BUTTON
-    drawer_state = gr.State(False)
-    plus_btn.click(lambda current: not current, inputs=[drawer_state], outputs=[drawer_state]).then(
-        lambda open_status: gr.update(open=open_status), inputs=[drawer_state], outputs=[tool_drawer]
-    )
 
     # SESSION HANDLERS
     def start_session():
