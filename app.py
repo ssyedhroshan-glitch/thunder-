@@ -399,7 +399,7 @@ def stream_model_response(model_choice, messages, temp, tokens, web_search, tool
             yield f"⚠️ **OpenAI Error:** {e}"
 
 # ==========================================
-# 7. UNIFIED LAYOUT WITH (+) BUTTON TOGGLE TRAY
+# 7. UNIFIED LAYOUT WITH FIXED TOGGLE TRAY
 # ==========================================
 DEFAULT_SYSTEM_PROMPT = (
     "You are Thunder AI, a high-speed multi-modal agent. "
@@ -409,23 +409,27 @@ DEFAULT_SYSTEM_PROMPT = (
 
 custom_css = """
 footer {visibility: hidden;}
-body, .gradio-container {background-color: #0b0f17 !important;}
+body, .gradio-container {background-color: #0b0f17 !important; padding: 10px !important;}
 .accent-title {
     color: #38bdf8 !important;
     font-weight: 700 !important;
+    margin-bottom: 10px !important;
 }
 .plus-btn {
-    font-size: 20px !important;
+    font-size: 22px !important;
     font-weight: bold !important;
-    min-width: 45px !important;
-    max-width: 45px !important;
+    min-width: 50px !important;
+    max-width: 50px !important;
+    height: 45px !important;
+    border-radius: 8px !important;
 }
 .tools-tray {
     border: 1px solid #1e293b !important;
     border-radius: 12px !important;
     padding: 12px !important;
     background-color: #0f172a !important;
-    margin-top: 5px !important;
+    margin-top: 8px !important;
+    margin-bottom: 8px !important;
 }
 """
 
@@ -433,11 +437,12 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", neutral_hue="slate"), cs
     session_id = gr.State(None)
     chat_state = gr.State([])
     file_context_state = gr.State("")
+    tray_visible_state = gr.State(False)
 
     gr.Markdown("<center><h3 class='accent-title'>⚡ THUNDER AI — WORKSPACE</h3></center>")
 
     # CHAT DISPLAY AT TOP
-    chatbot = gr.Chatbot(height=450, type="messages", bubble_full_width=False)
+    chatbot = gr.Chatbot(height=480, type="messages", bubble_full_width=False)
 
     # PROMPT INPUT BAR
     with gr.Row():
@@ -445,7 +450,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", neutral_hue="slate"), cs
         msg = gr.Textbox(placeholder="Ask a question, request search, or tap (+) for tools...", show_label=False, scale=8)
         send_btn = gr.Button("⚡ Send", variant="primary", scale=2)
 
-    # TOOLS TRAY (Hidden by default, toggles on clicking +)
+    # TOOLS TRAY (Explicitly toggled state)
     with gr.Column(visible=False, elem_classes=["tools-tray"]) as tools_tray:
         gr.Markdown("#### 🛠️ Tools & Input Options")
         with gr.Row():
@@ -474,11 +479,12 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", neutral_hue="slate"), cs
             audio_input = gr.Audio(sources=["microphone"], type="filepath", label="🎙️ Voice Input")
             clear_btn = gr.Button("Reset Memory", variant="stop", size="sm")
 
-    # TOGGLE TOOLS TRAY VISIBILITY ON (+) CLICK
-    def toggle_tools(is_visible):
-        return gr.update(visible=not is_visible)
+    # RELIABLE TOGGLE HANDLER FOR (+) BUTTON
+    def toggle_tray(current_status):
+        new_status = not current_status
+        return gr.update(visible=new_status), new_status
 
-    plus_btn.click(toggle_tools, inputs=[tools_tray], outputs=[tools_tray])
+    plus_btn.click(toggle_tray, inputs=[tray_visible_state], outputs=[tools_tray, tray_visible_state])
 
     # CANVAS & SANDBOX AT BOTTOM
     with gr.Accordion("🎨 Live Web Canvas & Sandbox Output", open=False):
