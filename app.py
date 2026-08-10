@@ -489,7 +489,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", neutral_hue="slate"), cs
 
     # SESSION HANDLERS
     def start_session():
-       init_db()
+        init_db()
         sessions = get_all_sessions()
         active_id = sessions[0][0] if sessions else create_new_session()
         hist = load_history(active_id)
