@@ -56,8 +56,6 @@ else:
     whisper_client = InferenceClient(model="openai/whisper-large-v3", timeout=20)
     flux_client = InferenceClient(model="black-forest-labs/FLUX.1-schnell", timeout=30)
 
-genai_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
-
 # ==========================================
 # 3. AUTONOMOUS TOOL DEFINITIONS
 # ==========================================
@@ -401,7 +399,7 @@ def stream_model_response(model_choice, messages, temp, tokens, web_search, tool
             yield f"⚠️ **OpenAI Error:** {e}"
 
 # ==========================================
-# 7. UNIFIED LAYOUT WITH POPUP INSIDE (+)
+# 7. UNIFIED LAYOUT WITH (+) BUTTON TOGGLE TRAY
 # ==========================================
 DEFAULT_SYSTEM_PROMPT = (
     "You are Thunder AI, a high-speed multi-modal agent. "
@@ -422,6 +420,13 @@ body, .gradio-container {background-color: #0b0f17 !important;}
     min-width: 45px !important;
     max-width: 45px !important;
 }
+.tools-tray {
+    border: 1px solid #1e293b !important;
+    border-radius: 12px !important;
+    padding: 12px !important;
+    background-color: #0f172a !important;
+    margin-top: 5px !important;
+}
 """
 
 with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", neutral_hue="slate"), css=custom_css) as demo:
@@ -440,8 +445,8 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", neutral_hue="slate"), cs
         msg = gr.Textbox(placeholder="Ask a question, request search, or tap (+) for tools...", show_label=False, scale=8)
         send_btn = gr.Button("⚡ Send", variant="primary", scale=2)
 
-    # TOOLS POPUP directly triggered by (+) button
-    with gr.Popup(trigger=plus_btn) as tools_popup:
+    # TOOLS TRAY (Hidden by default, toggles on clicking +)
+    with gr.Column(visible=False, elem_classes=["tools-tray"]) as tools_tray:
         gr.Markdown("#### 🛠️ Tools & Input Options")
         with gr.Row():
             cam_input = gr.Image(sources=["webcam"], type="filepath", label="📷 Camera", height=120)
@@ -469,6 +474,12 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", neutral_hue="slate"), cs
             audio_input = gr.Audio(sources=["microphone"], type="filepath", label="🎙️ Voice Input")
             clear_btn = gr.Button("Reset Memory", variant="stop", size="sm")
 
+    # TOGGLE TOOLS TRAY VISIBILITY ON (+) CLICK
+    def toggle_tools(is_visible):
+        return gr.update(visible=not is_visible)
+
+    plus_btn.click(toggle_tools, inputs=[tools_tray], outputs=[tools_tray])
+
     # CANVAS & SANDBOX AT BOTTOM
     with gr.Accordion("🎨 Live Web Canvas & Sandbox Output", open=False):
         html_preview = gr.HTML(value="<div style='color:#6b7280; text-align:center; padding:10px;'>Generated Web UIs render here.</div>")
@@ -478,7 +489,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="cyan", neutral_hue="slate"), cs
 
     # SESSION HANDLERS
     def start_session():
-        init_db()
+       init_db()
         sessions = get_all_sessions()
         active_id = sessions[0][0] if sessions else create_new_session()
         hist = load_history(active_id)
