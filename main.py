@@ -1,27 +1,25 @@
 from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+import asyncio
 
-app = FastAPI()
+app = FastAPI(title="Thunder AI Engine")
 
-class UserData(BaseModel):
-    name: str
-    email: str
+class ChatRequest(BaseModel):
+    prompt: str
+    temperature: float = 0.7
 
-@app.get("/")
-def read_root():
-    return {"message": "Welcome to the FastAPI Backend!"}
+async def generate_ai_stream(prompt: str):
+    # Simulated model streaming tokens
+    words = f"Echo response to: '{prompt}' - AI engine processing complete.".split()
+    for word in words:
+        yield f"data: {word}\n\n"
+        await asyncio.sleep(0.08)
 
-@app.post("/api/user")
-def create_user(user: UserData):
-    # Process user logic or save to DB here
-    return {
-        "status": "success",
-        "message": f"User {user.name} created successfully!",
-        "data": user
-    }
-
-if __name__ == "__main__":
-    import uvicorn
-    # Host on 0.0.0.0 to accept connections across local network
-    uvicorn.run(app, host="0.0.0.0", port=8000)
-  
+@app.post("/api/chat/stream")
+async def chat_stream(request: ChatRequest):
+    return StreamingResponse(
+        generate_ai_stream(request.prompt), 
+        media_type="text/event-stream"
+    )
+    
