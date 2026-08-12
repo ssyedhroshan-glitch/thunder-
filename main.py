@@ -16,7 +16,7 @@ app.add_middleware(
 )
 
 # Initialize Async client (reads OPENAI_API_KEY from environment variables)
-client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+client = AsyncOpenAI(api_key=api_key)
 
 class ChatRequest(BaseModel):
     prompt: str
